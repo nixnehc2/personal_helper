@@ -4,10 +4,42 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agent.main import run_turn
+from agent.main import HISTORY_NAME, RunHistory, run_turn
 from agent.main import parse_email_command
 from agent.tools import FileTools
 from agent.llm import Client
+
+
+class RunHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.path = self.root / HISTORY_NAME
+
+    def test_appends_multiple_sessions_to_one_file(self):
+        first = RunHistory(self.path, session_id="first")
+        first.append("session_start", model="test-model", root=str(self.root))
+        first.append("turn_complete", user="你好", messages=[
+            dict(role="user", content="你好"),
+            dict(role="assistant", content=[dict(type="text", text="我在")]),
+        ])
+        second = RunHistory(self.path, session_id="second")
+        second.append("session_start", model="test-model", root=str(self.root))
+
+        records = [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["event"] for record in records],
+                         ["session_start", "turn_complete", "session_start"])
+        self.assertEqual([record["session_id"] for record in records],
+                         ["first", "first", "second"])
+        self.assertEqual(records[1]["messages"][1]["content"][0]["text"], "我在")
+
+    def test_history_is_private_from_memory_tools(self):
+        files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
+        RunHistory(self.path).append("session_start")
+        result = files.execute("read_file", dict(path=HISTORY_NAME))
+        self.assertIn("error", result)
+        self.assertNotIn(HISTORY_NAME, files.policy.changes)
 
 
 class ToolTests(unittest.TestCase):

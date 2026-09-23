@@ -6,6 +6,7 @@ import os
 import shlex
 from datetime import datetime
 from pathlib import Path
+import uuid
 
 from .llm import Client, load_config
 from .tools import FileTools, TOOLS
@@ -33,9 +34,27 @@ Make minimal edits and update navigation when necessary. Root protocol/index are
 Report partial completion honestly. Do not infer a user's personal facts. Always answer in Chinese.
 """
 
+HISTORY_NAME = ".memory-agent-history.jsonl"
+
 
 def safe_display(value):
     return "".join(c if c in "\n\t" or (c.isprintable() and c != "\x1b") else f"\\u{ord(c):04x}" for c in value)
+
+
+class RunHistory:
+    def __init__(self, path, session_id=None):
+        self.path = Path(path)
+        self.session_id = session_id or uuid.uuid4().hex
+
+    def append(self, event, **fields):
+        record = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "session_id": self.session_id,
+            "event": event,
+            **fields,
+        }
+        with self.path.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def tool_summary(call):
@@ -211,8 +230,10 @@ def main():
     parser = argparse.ArgumentParser(description="Personal Agent V1")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent / "memory")
     args = parser.parse_args()
+    history = None
     try:
         files = FileTools(args.root, confirm_batch)
+        history = RunHistory(files.root / HISTORY_NAME)
         files.text(files.path("AGENT.md"))
         print("[memory] 已用 Formal Memory 初始化 Temporary Memory。")
         config = load_config()
@@ -220,30 +241,42 @@ def main():
         if not token:
             raise ValueError("API token is required")
         client = Client(token, config)
+        history.append("session_start", model=client.model, root=str(files.root))
     except (OSError, ValueError, EOFError, KeyboardInterrupt) as error:
+        if history is not None:
+            history.append("startup_error", error=repr(error))
         print("启动失败：" + str(error))
         return 1
     print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/email <path> 导入邮件。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
+    print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
     from .email_workflow import ingest_email
     while True:
         try:
             user = input("\n你> ").strip()
         except (EOFError, KeyboardInterrupt):
+            history.append("session_end", reason="eof_or_interrupt")
             print("\n已退出。")
             break
         if user == "/exit":
+            history.append("command", command="/exit")
+            history.append("session_end", reason="exit")
             break
         if user == "/clear":
             messages.clear()
+            history.append("command", command="/clear", note="conversation cleared; history retained")
             print("对话已清空，知识库未修改。")
             continue
         if not user:
             continue
+        history.append("user_input", text=user)
+        transcript_start = len(messages)
         try:
             email_command = parse_email_command(user)
             if email_command is None:
-                run_turn(client, files, messages, user)
+                result = run_turn(client, files, messages, user)
+                history.append("turn_complete", user=user, messages=messages[transcript_start:],
+                               result=result, temporary_writes=files.writes)
             else:
                 path, authored, reprocess = email_command
                 result = ingest_email(path, client, files, authored_by_user=authored,
@@ -253,7 +286,12 @@ def main():
                       f"temporary={len(temporary)} 个文件")
                 if result["status"] == "duplicate_skipped":
                     print("[email] " + safe_display(result.get("note", "")))
+                history.append("turn_complete", user=user, messages=messages[transcript_start:],
+                               email_status=result["status"], raw_path=result["raw"]["path"],
+                               temporary_writes=result.get("temporary_written", []))
         except (Exception, KeyboardInterrupt) as error:
+            history.append("turn_error", user=user, messages=messages[transcript_start:],
+                           error=repr(error), temporary_writes=files.writes)
             print("本轮中止：" + safe_display(str(error)))
             print("本轮已写入：" + safe_display(", ".join(files.writes) or "无"))
             print("未提交 Temporary 已保留；下次启动会从 Formal Memory 重新初始化。")
