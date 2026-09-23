@@ -7,7 +7,9 @@ __pycache__/
 /config.local.json
 /tmp/
 /email_test/
-/memory/inbox/email/*.eml
+
+# Personal Memory is local-only and must never be published.
+/memory/
 
 # Runtime-private Temporary Memory and transaction state
 .memory-temporary/
