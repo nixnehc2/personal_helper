@@ -1,9 +1,13 @@
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from agent.main import confirm_transaction
 from agent.main import HISTORY_NAME, RunHistory, run_turn
 from agent.main import parse_email_command
 from agent.tools import FileTools
@@ -40,6 +44,21 @@ class RunHistoryTests(unittest.TestCase):
         result = files.execute("read_file", dict(path=HISTORY_NAME))
         self.assertIn("error", result)
         self.assertNotIn(HISTORY_NAME, files.policy.changes)
+
+
+class DisplayTests(unittest.TestCase):
+    def test_commit_confirmation_omits_raw_email_diff(self):
+        raw_diff = "BASE64_DIFF" * 10000
+        output = StringIO()
+        with patch("builtins.input", return_value="no"), redirect_stdout(output):
+            result = confirm_transaction("commit", [
+                SimpleNamespace(path="inbox/email/archive.eml", action="create", diff=raw_diff),
+                SimpleNamespace(path="pending/candidate.md", action="create", diff="+candidate"),
+            ])
+        self.assertEqual(result, "no")
+        self.assertIn("[原始邮件归档] diff 已省略", output.getvalue())
+        self.assertIn("+candidate", output.getvalue())
+        self.assertNotIn("BASE64_DIFF", output.getvalue())
 
 
 class ToolTests(unittest.TestCase):

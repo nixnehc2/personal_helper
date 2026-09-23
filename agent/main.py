@@ -86,12 +86,23 @@ def tool_summary(call):
     return prefix
 
 
+def is_raw_email_archive(path):
+    return path.casefold().startswith("inbox/email/")
+
+
+def print_change_diff(change):
+    if is_raw_email_archive(change.path):
+        print("[原始邮件归档] diff 已省略")
+        return
+    print(safe_display(change.diff))
+
+
 def confirm_transaction(action, changes):
     print("\n=== Memory 临时修改 ===")
     labels = {"create": "新增", "edit": "修改", "delete": "删除"}
     for change in changes:
         print(f"\n[{labels[change.action]}] " + safe_display(change.path))
-        print(safe_display(change.diff))
+        print_change_diff(change)
     question = "是否合并到正式 Memory？(yes/no): " if action == "commit" else "是否放弃整个 Temporary Transaction？(yes/no): "
     try:
         # Deliberately strict: other text, including email content, never approves.
@@ -104,7 +115,7 @@ def confirm_batch(changes):
     print("\nself/ 额外审阅（当前 Transaction 的 self diff）：")
     for index, change in enumerate(changes, 1):
         print(f"\n[{index}] " + safe_display(change.path))
-        print(safe_display(change.diff))
+        print_change_diff(change)
     print("yes 全部接受；no 全部拒绝；1,3 接受部分；edit 2 编辑第2项后接受该项。")
     print("编辑模式用单独一行 .end 结束完整文件内容；部分接受时整个 Transaction 保留；编辑后需重新 commit。")
     try:
@@ -182,7 +193,10 @@ def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_syst
                         emit(safe_display(f"[{change['action']}] {change['path']}"))
                         if change["conflict"]:
                             emit("[memory] Formal 已被外部修改；解决冲突前不能提交。")
-                        emit(safe_display(change["diff"]))
+                        if change.get("diff_omitted"):
+                            emit("[原始邮件归档] diff 已省略")
+                        else:
+                            emit(safe_display(change["diff"]))
                 emit("[result] " + safe_display(result.get("error", result.get("status", "success"))))
                 results.append(dict(type="tool_result", tool_use_id=call["id"],
                                     content=json.dumps(result, ensure_ascii=False), is_error="error" in result))
