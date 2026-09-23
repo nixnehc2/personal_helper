@@ -25,7 +25,7 @@ def ingest_email(path, client, files, *, authored_by_user=False, reprocess=False
     raw = read_raw_email(path)
     archive = files.policy.archive_email(raw)
     if archive["duplicate"] and not reprocess:
-        return dict(raw=archive, status="duplicate_skipped", note="Use --reprocess after a failed prior attempt.")
+        return dict(raw=archive, status="duplicate_skipped", note="Use --force to process the archived email again.")
     parsed = parse_bytes(raw)
     old = files.incoming_email
     files.incoming_email = not authored_by_user

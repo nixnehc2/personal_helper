@@ -22,6 +22,7 @@ def main():
     ingest = commands.add_parser("ingest")
     ingest.add_argument("path", type=Path)
     ingest.add_argument("--authored-by-user", action="store_true", help="Only use for emails actually written/approved by you")
+    ingest.add_argument("--force", action="store_true", help="Process duplicate archived mail again without creating another copy")
     ingest.add_argument("--reprocess", action="store_true", help="Explicitly retry archived mail after a failed processing attempt")
     draft = commands.add_parser("draft")
     draft.add_argument("--request", required=True)
@@ -44,7 +45,8 @@ def main():
         client = Client(token, config)
         files = FileTools(args.root, confirm_batch)
         if args.command == "ingest":
-            result = ingest_email(args.path, client, files, authored_by_user=args.authored_by_user, reprocess=args.reprocess)
+            result = ingest_email(args.path, client, files, authored_by_user=args.authored_by_user,
+                                  reprocess=args.force or args.reprocess)
         elif args.command == "draft":
             if args.output.resolve().is_relative_to(args.root.resolve()):
                 raise ValueError("draft artifact must stay outside memory root")

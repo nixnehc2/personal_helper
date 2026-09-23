@@ -58,6 +58,18 @@ class EmailMemoryTests(unittest.TestCase):
         self.assertEqual(list((self.root / "projects").glob("*.md")), [self.root / "projects/_INDEX.md"])
         self.assertIn("error", self.files.execute("replace_text", dict(path=result["raw"]["path"], old_text="a", new_text="b")))
 
+    def test_force_reprocesses_duplicate_without_duplicate_archive(self):
+        first = ingest_email(self.mail, ScriptClient([]), self.files, emit=lambda _: None)
+        second = ingest_email(self.mail, ScriptClient([[create("projects/forced.md", "forced candidate")]]),
+                              self.files, reprocess=True, emit=lambda _: None)
+        self.assertEqual(first["status"], "processed")
+        self.assertEqual(second["status"], "processed")
+        self.assertEqual(first["raw"]["path"], second["raw"]["path"])
+        self.assertEqual(list((self.files.workspace_root / "inbox/email").glob("*.eml")),
+                         [self.files.workspace_root / second["raw"]["path"]])
+        self.assertEqual((self.files.workspace_root / "projects/forced.md").read_text(encoding="utf-8"),
+                         "forced candidate")
+
     def test_project_and_existing_thread(self):
         client = ScriptClient([[create("projects/launch.md", "Launch October 1; source one"),
                                 create("history/email_threads/launch.md", "one: Launch October 1")]])

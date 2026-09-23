@@ -109,6 +109,8 @@ class ToolTests(unittest.TestCase):
                          (r"C:\mail\a.eml", False, False))
         self.assertEqual(parse_email_command('/email "C:\\mail with spaces\\a.eml" --authored-by-user --reprocess'),
                          (r"C:\mail with spaces\a.eml", True, True))
+        self.assertEqual(parse_email_command('/email C:\\mail\\a.eml --force'),
+                         (r"C:\mail\a.eml", False, True))
         self.assertEqual(parse_email_command("not an email command"), None)
 
     def test_hardlink_is_rejected(self):

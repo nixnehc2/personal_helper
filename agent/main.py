@@ -229,14 +229,14 @@ def parse_email_command(user):
         part = unquote(part)
         if part == "--authored-by-user":
             authored = True
-        elif part == "--reprocess":
+        elif part in ("--force", "--reprocess"):
             reprocess = True
         elif path is None:
             path = part
         else:
             raise ValueError("/email accepts one path plus optional flags")
     if not path:
-        raise ValueError("usage: /email <path> [--authored-by-user] [--reprocess]")
+        raise ValueError("usage: /email <path> [--authored-by-user] [--force|--reprocess]")
     return path, authored, reprocess
 
 
@@ -261,7 +261,7 @@ def main():
             history.append("startup_error", error=repr(error))
         print("启动失败：" + str(error))
         return 1
-    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/email <path> 导入邮件。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
+    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/email <path> 导入邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
     from .email_workflow import ingest_email
