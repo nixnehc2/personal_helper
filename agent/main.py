@@ -81,6 +81,10 @@ def tool_summary(call):
                          f" | 最多行数={brief(arguments.get('max_lines', 200))}")
     if name == "list_directory":
         return prefix + f" | 目录={brief(arguments.get('path'))}"
+    if name == "import_email":
+        return prefix + f" | 邮件 ID={brief(arguments.get('id'))}"
+    if name == "email":
+        return prefix + f" | EML={brief(arguments.get('path'))}"
     if name in ("create_file", "replace_text", "write_memory", "edit_memory", "delete_memory"):
         return prefix + f" | 文件={brief(arguments.get('path'))} | 修改 Temporary，正式 Memory 未变"
     return prefix
@@ -145,6 +149,14 @@ def confirm_batch(changes):
 
 
 def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system=""):
+    # Tool-triggered ingestion uses its own transcript: the outer transcript has
+    # an outstanding tool_use and cannot be sent to the model until it is answered.
+    # It still shares the same client, FileTools and Temporary transaction.
+    with files.email_context(client, emit=emit):
+        return _run_turn(client, files, messages, user, emit, max_steps, extra_system)
+
+
+def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system=""):
     if user == "/cancel":
         result = files.policy.discard(explicit=True)
         emit("[memory] " + result["status"])
@@ -159,6 +171,8 @@ def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_syst
                  " describe it as expired/historical when relevant. Do not infer current status solely from old mail.")
     system += f"\nRuntime: current Temporary Transaction contains {len(files.policy.changes)} changed file(s). Use show_memory_changes to inspect it."
     tool_specs = getattr(files, "tool_specs", TOOLS)
+    if files.processing_eml:
+        tool_specs = [spec for spec in tool_specs if spec["name"] not in ("email", "import_email")]
     messages.append(dict(role="user", content=user))
     try:
         for _ in range(max_steps):
@@ -240,6 +254,22 @@ def parse_email_command(user):
     return path, authored, reprocess
 
 
+def parse_tool_command(user):
+    """Translate explicit commands to tool calls; no mailbox or Memory logic."""
+    if user in ("update_email", "update_email()", "/update_email"):
+        return "update_email", {}
+    parts = user.split()
+    if parts and parts[0] == "/import_email":
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() or int(parts[1]) <= 0:
+            raise ValueError("用法：/import_email <正整数 ID>")
+        return "import_email", {"id": int(parts[1])}
+    email = parse_email_command(user)
+    if email is not None:
+        path, authored, reprocess = email
+        return "email", dict(path=path, authored_by_user=authored, reprocess=reprocess)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Personal Agent V1")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent / "memory")
@@ -261,10 +291,9 @@ def main():
             history.append("startup_error", error=repr(error))
         print("启动失败：" + str(error))
         return 1
-    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/email <path> 导入邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
+    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/import_email <id> 导入单封邮件，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
-    from .email_workflow import ingest_email
     while True:
         try:
             user = input("\n你> ").strip()
@@ -283,33 +312,30 @@ def main():
             continue
         if not user:
             continue
-        if user in ("update_email", "update_email()", "/update_email"):
-            print("同步邮箱……")
-            result = files.execute("update_email", {})
-            print(safe_display(result.get("error", result.get("table", ""))))
-            if "error" not in result:
-                print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
-            continue
         history.append("user_input", text=user)
         transcript_start = len(messages)
         try:
-            email_command = parse_email_command(user)
-            if email_command is None:
+            command = parse_tool_command(user)
+            if command is None:
                 result = run_turn(client, files, messages, user)
-                history.append("turn_complete", user=user, messages=messages[transcript_start:],
-                               result=result, temporary_writes=files.writes)
             else:
-                path, authored, reprocess = email_command
-                result = ingest_email(path, client, files, authored_by_user=authored,
-                                      reprocess=reprocess, messages=messages)
-                temporary = result.get("temporary_written", [])
-                print(f"[email] {result['status']} | raw={safe_display(result['raw']['path'])} | "
-                      f"temporary={len(temporary)} 个文件")
-                if result["status"] == "duplicate_skipped":
-                    print("[email] " + safe_display(result.get("note", "")))
-                history.append("turn_complete", user=user, messages=messages[transcript_start:],
-                               email_status=result["status"], raw_path=result["raw"]["path"],
-                               temporary_writes=result.get("temporary_written", []))
+                name, arguments = command
+                print(tool_summary(dict(name=name, input=arguments)))
+                with files.email_context(client, messages=messages,
+                                         explicit_email_path=arguments["path"] if name == "email" else None):
+                    result = files.execute(name, arguments)
+                if "error" in result:
+                    print("[error] " + safe_display(result["error"]))
+                elif name == "update_email":
+                    print(safe_display(result["table"]))
+                    print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
+                else:
+                    print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))
+                # Keep the explicit command and its outcome visible to later chat.
+                messages.extend([dict(role="user", content=user),
+                                 dict(role="assistant", content=json.dumps(result, ensure_ascii=False))])
+            history.append("turn_complete", user=user, messages=messages[transcript_start:],
+                           result=result, temporary_writes=files.writes)
         except (Exception, KeyboardInterrupt) as error:
             history.append("turn_error", user=user, messages=messages[transcript_start:],
                            error=repr(error), temporary_writes=files.writes)

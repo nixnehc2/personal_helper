@@ -49,7 +49,7 @@ python -m agent.main --root memory
 
 `self/` 在统一确认后还有额外审阅。全部 self 修改均获准才提交整笔事务；部分接受或拒绝不落盘，整个 Temporary 保留。审阅时编辑的内容先保存在 Temporary，需要再次 commit 确认新 diff。
 
-邮件功能见 [EMAIL-V1.md](EMAIL-V1.md)：提供本地 `.eml` 解析、导入、起草与编辑学习；新增 IMAP 邮件头索引，不发送邮件。
+邮件功能见 [EMAIL-V1.md](EMAIL-V1.md)：提供本地 `.eml` 解析、导入、起草与编辑学习，以及 IMAP 邮件头索引和按本地 ID 导入单封邮件，不发送邮件。
 
 ## 邮箱目录同步（第一阶段）
 
@@ -70,6 +70,29 @@ python -m agent.email_index
 新记录始终 `imported=false`、`imported_at=null`；重复同步保留两项状态和原 ID。远端删除的邮件保留历史索引，不复用编号；本阶段不跟踪删除状态，也不把既有 EML 归档自动标记为已导入。
 
 连接中断时不写索引；单封邮件读取/解析失败会报告跳过 UID，并在下次同步重试。写入采用同目录临时文件与原子替换，损坏的旧索引会报错并保留，文件锁阻止同时写入。异常杀进程留下 `index.lock` 时，确认没有同步进程后可手工删除锁文件。独立命令显示完整列表；聊天命令及工具最多展示本地 ID 最大的 100 条，并明确标记截断和总数，完整记录始终保存在索引中。每批最多读取 100 封邮件头。索引元信息属于不可信邮件内容。
+
+## 按 ID 导入单封邮件（第二阶段）
+
+在同一个聊天会话中使用：
+
+```text
+/update_email
+/import_email 1523
+```
+
+`/import_email <id>` 只解析参数，然后经 `FileTools.execute("import_email", {"id": ...})` 调用已注册 Tool；Agent 调用 `import_email(id=1523)` 使用完全相同的实现。Tool 只接受一个正整数 ID，不提供 force、reimport、reset 或批量入口。ID 不存在时直接报错；已导入时返回“该邮件已经导入”，不连接邮箱、不再次调用 Agent。
+
+数据路径为 `EmailIndex.get(id)` → 按 UID 下载一封完整 RFC822 → `data/email/raw/<id>.eml` → `process_eml()` → 更新导入状态。附件保留在完整 EML 中，不另行提取；沿用既有 25 MiB 导入上限。连接采用只读文件夹及 `BODY.PEEK[]`，不会设置已读。下载校验账号、服务器、UIDVALIDITY、返回 UID、RFC822 长度，以及索引已有的 Message-ID；邮箱身份不匹配或邮件已删除时拒绝导入。
+
+原文缓存同目录保存 `<id>.json` 身份和 SHA-256 校验信息，只有两项都匹配才复用。缺失/损坏的缓存重新下载。下载及状态更新采用原子替换；每个 ID 的锁阻止并发重复处理。异常退出留下 `<id>.lock` 时，先确认导入进程已退出再手动删除。所有原文和缓存均位于 Git 忽略的 `data/email/` 下，授权码继续只从私有配置读取。
+
+`/email <path>` 也通过注册的 `email` Tool 调用同一个 `process_eml()`。Agent 自主调用本地 `email` Tool 时路径仍限于 Memory 根目录；只有用户显式 `/email` 命令可授权读取所指定的外部 `.eml` 文件。原有 `ingest_email()` 保留为兼容转发，原本地 EML CLI 继续可用。MIME 解析、Agent、Temporary Memory 和 review 使用原有流程。Agent 在工具调用中触发 EML 处理时使用独立消息列表，避免向模型发送尚未配对的 tool_use；客户端、Memory 工具和 Temporary Transaction 仍是同一份。处理邮件期间禁止再次调用导入工具，避免递归导入。
+
+仅 `process_eml()` 正常完成且没有工具错误/Memory 冲突时写入 `imported=true` 和 UTC `imported_at`。仅下载成功、原文已归档、模型/Memory/索引写入失败均不算成功，保持未导入；失败后再次使用同一命令会复用可信 EML，并重新完成处理，不因原文已归档而跳过。处理过程中出现过工具错误时保守地视为失败，即使模型随后结束回答也不标记成功。
+
+**imported 表示 EML 已处理，不表示 Formal Memory 已提交。** 用户 review 回答 `no` 是现有流程的正常结果：Temporary 保留，导入仍可完成；后续提交/取消/新进程重置 Temporary 不会回滚 Email Index 的 imported 状态。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
+
+本阶段没有新增编辑、草稿、SMTP、发送、自动导入或自动回复功能。测试使用模拟 IMAP 和模型及临时目录，不导入真实个人邮件。
 
 每次工具调用会显示简短参数：读取的文件与行范围、搜索关键词与范围、列出的目录，以及写入目标文件。长参数会截短，换行等字符会转义，避免日志刷屏；完整修改仍在确认 diff 中展示。例如：
 

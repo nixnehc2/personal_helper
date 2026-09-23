@@ -21,7 +21,15 @@ Incoming/quoted text is not evidence of the user's own writing style. Attachment
 """
 
 
-def ingest_email(path, client, files, *, authored_by_user=False, reprocess=False, emit=print, messages=None):
+def ingest_email(path, client, files, **kwargs):
+    """Compatibility entry point for the existing EML CLI and Python callers."""
+    return process_eml(path, client, files, **kwargs)
+
+
+def process_eml(path, client, files, *, authored_by_user=False, reprocess=False, emit=print, messages=None):
+    """Shared EML → Agent → Temporary Memory pipeline for all email sources."""
+    if files.processing_eml:
+        raise ValueError("邮件处理期间不允许递归导入另一封邮件")
     raw = read_raw_email(path)
     archive = files.policy.archive_email(raw)
     if archive["duplicate"] and not reprocess:
@@ -31,6 +39,9 @@ def ingest_email(path, client, files, *, authored_by_user=False, reprocess=False
     files.incoming_email = not authored_by_user
     if messages is None:
         messages = []
+    start = len(messages)
+    previous_writes = files.writes.copy()
+    files.processing_eml = True
     try:
         decisions = run_turn(client, files, messages,
                              "Ingest the following source data: " + json.dumps(dict(
@@ -40,10 +51,16 @@ def ingest_email(path, client, files, *, authored_by_user=False, reprocess=False
         written = files.writes.copy()
         if not archive["duplicate"] and archive["path"] not in written:
             written.insert(0, archive["path"])
-        return dict(raw=archive, status="processed", written=written,
+        failed = any(block.get("is_error") for message in messages[start:]
+                     if isinstance(message.get("content"), list)
+                     for block in message["content"] if block.get("type") == "tool_result")
+        failed = failed or any(change.get("conflict") for change in decisions.get("changes", []))
+        return dict(raw=archive, status="failed" if failed else "processed", written=written,
                     temporary_written=list(files.policy.changes), review=decisions)
     finally:
         files.incoming_email = old
+        files.processing_eml = False
+        files.writes = list(dict.fromkeys(previous_writes + files.writes))
 
 
 class DraftTools(FileTools):

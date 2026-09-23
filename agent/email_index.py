@@ -1,5 +1,7 @@
 """Local metadata index. No EML download, model call, or Memory writes."""
 import copy
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesHeaderParser
 import imaplib
@@ -38,16 +40,57 @@ class EmailIndex:
         except (ValueError, KeyError, TypeError, AssertionError):
             raise ValueError("邮件索引格式损坏；已保留原文件，请修复后重试") from None
 
-    def merge(self, source, metadata):
+    @contextmanager
+    def locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = self.path.with_suffix(".lock")
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             raise ValueError("邮件索引正在同步；若进程异常退出，请确认没有同步进程后删除 index.lock") from None
-        temporary = None
         try:
             os.close(fd)
+            yield
+        finally:
+            lock.unlink(missing_ok=True)
+
+    def write(self, data):
+        """Atomic replacement; callers must hold locked()."""
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, prefix=".index-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def get(self, id):
+        if type(id) is not int or id <= 0:
+            raise ValueError("邮件 ID 必须是正整数")
+        row = next((r for r in self.read()["emails"] if r["id"] == id), None)
+        if row is None:
+            raise ValueError(f"邮件 ID {id} 不存在，请先 update_email")
+        return row
+
+    def mark_imported(self, expected):
+        with self.locked():
+            data = self.read()
+            row = next((r for r in data["emails"] if r["id"] == expected["id"]), None)
+            keys = ("host", "account", "folder", "uidvalidity", "imap_uid", "message_id")
+            if row is None or any(row[k] != expected[k] for k in keys):
+                raise ValueError("导入期间邮件索引发生变化，未标记已导入，请重新同步后重试")
+            if not row["imported"]:
+                row.update(imported=True, imported_at=datetime.now(timezone.utc).isoformat())
+                self.write(data)
+            return row
+
+    def merge(self, source, metadata):
+        with self.locked():
             data = copy.deepcopy(self.read())
             added = 0
             for item in metadata:
@@ -62,18 +105,8 @@ class EmailIndex:
                     data["emails"].append(dict(source, **item, id=data["next_id"], imported=False, imported_at=None))
                     data["next_id"] += 1
                     added += 1
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, prefix=".index-", suffix=".tmp", delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump(data, stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
+            self.write(data)
             return data["emails"], added
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            lock.unlink(missing_ok=True)
 
 
 def fetch_metadata(settings):

@@ -2,7 +2,7 @@
 
 ## 范围
 
-完成 Phase A–F：统一 Memory Temporary Transaction、MIME parser、本地导入、起草、编辑学习。新增独立的 QQ IMAP 邮件目录索引：`python -m agent.email_index` 或聊天输入 `update_email`，只同步邮件头、稳定本地 ID 和导入状态。配置与索引说明见 README。未连接索引到 EML 导入，未接入 SMTP；当前没有发送接口，草稿和最终正文均不会发送。
+完成 Phase A–F：统一 Memory Temporary Transaction、MIME parser、本地导入、起草、编辑学习。QQ IMAP 邮件目录索引可通过 `python -m agent.email_index` 或聊天输入 `/update_email` 同步。第二阶段支持 `/import_email <id>` 和 Agent `import_email(id)`，两种调用共用同一个 Tool，只下载指定邮件，随后与 `/email <path>` 共用 `process_eml()`。处理成功后标记 imported；失败不标记，已导入则跳过。配置、缓存校验、状态语义和限制见 README。未接入 SMTP；当前没有发送接口，草稿和最终正文均不会发送。
 
 原有资料保留。新增的正式 memory 文件是协议、索引和空主题文件；测试所得事实只写到 `tmp/` 下，不写入正式个人资料。`email_test/`、`tmp/`、原始 `.eml` 和本地配置均已加入 Git 忽略规则。本阶段没有提交或上传资料。
 
