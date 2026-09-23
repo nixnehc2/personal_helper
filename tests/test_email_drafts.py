@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from agent.email_drafts import DraftStore
+from agent.email_drafts import DraftStore, parse_draft
 from agent.main import main, parse_tool_command, run_turn
 from agent.tools import FileTools, TOOLS
 
@@ -84,6 +84,41 @@ class DraftTests(unittest.TestCase):
             self.assertIn("error", self.edit(client, draft_id=draft_id))
         client.complete.assert_not_called()
         self.assertEqual(self.files.active_email_draft_id, 1)
+
+    def test_fenced_json_preserves_body_without_retry(self):
+        response = answer("正文含有 ``` 和 {括号}，保持原文。")
+        response["content"][0]["text"] = "```json\n" + response["content"][0]["text"] + "\n```"
+        client = Mock(complete=Mock(return_value=response))
+        result = self.edit(client)
+        self.assertEqual(result["body"], "正文含有 ``` 和 {括号}，保持原文。")
+        client.complete.assert_called_once()
+
+    def test_plain_text_response_gets_one_format_correction(self):
+        response = dict(content=[dict(type="text", text="Subject: 测试\n这是一封测试邮件。")], stop_reason="end_turn")
+        def complete(system, transcript, specs):
+            self.assertFalse(self.path.exists(), "must not save before validation")
+            if client.complete.call_count == 1:
+                return response
+            self.assertIn("Runtime 草稿格式校验失败", transcript[-1]["content"])
+            self.assertEqual(transcript[-2]["content"], response["content"])
+            return answer("这是一封测试邮件。")
+        client = Mock(complete=Mock(side_effect=complete))
+        self.assertEqual(self.edit(client)["body"], "这是一封测试邮件。")
+        self.assertEqual(client.complete.call_count, 2)
+
+    def test_invalid_format_retry_is_bounded_and_does_not_create_draft(self):
+        client = Mock(complete=Mock(return_value=dict(content=[dict(type="text", text="not json")], stop_reason="end_turn")))
+        result = self.edit(client)
+        self.assertIn("纠正格式后仍未返回有效草稿", result["error"])
+        self.assertEqual(client.complete.call_count, 2)
+        self.assertFalse(self.path.exists())
+        self.assertIsNone(self.files.active_email_draft_id)
+
+    def test_ambiguous_prose_is_not_silently_extracted(self):
+        for text in ('说明：{"to":null,"subject":"主题","body":"正文"}',
+                     '{"to":null,"subject":"主题","body":"正文"}\n{"body":"另一份"}'):
+            with self.assertRaises(ValueError):
+                parse_draft([dict(type="text", text=text)])
 
     def test_conflicting_edit_does_not_overwrite(self):
         self.edit()

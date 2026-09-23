@@ -3,6 +3,7 @@ import copy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 
 from .email_index import EmailIndex
 from .tools import TOOLS
@@ -71,6 +72,21 @@ def validate_content(content):
         raise ValueError("草稿超过 V1 大小限制")
 
 
+def parse_draft(blocks):
+    text = "".join(block["text"] for block in blocks if block.get("type") == "text").strip()
+    # Only unwrap a complete fenced document; never guess which embedded object
+    # to save from explanatory prose or multiple candidate drafts.
+    fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        content = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"草稿不是有效 JSON（第 {error.lineno} 行，第 {error.colno} 列）") from None
+    validate_content(content)
+    return content
+
+
 def edit_email(instruction, draft_id, client, files, messages=None, emit=print):
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("写作要求不能为空")
@@ -82,6 +98,7 @@ def edit_email(instruction, draft_id, client, files, messages=None, emit=print):
     system = WRITING_PROMPT + "\nKnowledge-base protocol (AGENT.md):\n" + files.text(files.path("AGENT.md"))
     system += "\nRuntime current local time: " + datetime.now().astimezone().isoformat()
     specs = [spec for spec in TOOLS if spec["name"] in READ_TOOLS]
+    format_retried = False
     for _ in range(20):
         if len(json.dumps(transcript, ensure_ascii=False)) > 250000:
             raise ValueError("写作上下文超过 V1 上限，请 /clear 后重试")
@@ -106,10 +123,18 @@ def edit_email(instruction, draft_id, client, files, messages=None, emit=print):
         if response.get("stop_reason") != "end_turn":
             raise ValueError("模型未正常完成草稿，原草稿未修改")
         try:
-            content = json.loads("".join(block["text"] for block in blocks if block.get("type") == "text"))
-        except ValueError:
-            raise ValueError("模型未返回有效草稿 JSON，原草稿未修改") from None
-        validate_content(content)
+            content = parse_draft(blocks)
+        except ValueError as error:
+            if format_retried:
+                raise ValueError(f"模型纠正格式后仍未返回有效草稿：{error}；未保存草稿，原草稿未修改") from None
+            format_retried = True
+            emit("[email] 模型草稿格式不符合要求，正在纠正一次；尚未保存。")
+            transcript.append(dict(role="assistant", content=blocks))
+            transcript.append(dict(role="user", content=(
+                f"Runtime 草稿格式校验失败：{error}。请根据原始用户要求和已有信息返回完整草稿 JSON，"
+                "仅包含 to、subject、body，不要解释或附带其他文字。未知邮箱用 null，"
+                "正文缺失的信息留自然占位，不编造事实；不要写 Memory 或发送邮件。")))
+            continue
         draft = store.save(content, previous)
         files.active_email_draft_id = draft["id"]
         display = f"Draft #{draft['id']}（本地草稿，未发送）\n\nTo: {draft['to'] or ''}\nSubject: {draft['subject']}\n\n{draft['body']}"
