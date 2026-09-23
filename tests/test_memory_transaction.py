@@ -89,6 +89,19 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual((self.root / "pending/preference.md").read_text(encoding="utf-8"), "candidate")
         self.assert_synchronized()
 
+    def test_show_omits_raw_email_archive_diff(self):
+        archive = self.files.policy.archive_email(b"raw email")
+        result = self.files.show_memory_changes()
+        change = next(item for item in result["changes"] if item["path"] == archive["path"])
+        self.assertIsNone(change["diff"])
+        self.assertTrue(change["diff_omitted"])
+
+        self.files.create_file("pending/candidate.md", "candidate")
+        result = self.files.show_memory_changes()
+        change = next(item for item in result["changes"] if item["path"] == "pending/candidate.md")
+        self.assertIn("+candidate", change["diff"])
+        self.assertFalse(change["diff_omitted"])
+
     def test_new_session_resets_stale_temporary_from_formal(self):
         self.files.create_file("projects/b.md", "temporary")
         self.assertTrue((self.files.workspace_root / "projects/b.md").exists())

@@ -332,7 +332,10 @@ class MemoryPolicy:
         result = []
         for path, change in changes.items():
             digest = hashlib.sha256(formal[path].read_bytes()).hexdigest() if path in formal else None
-            result.append(dict(path=path, action=change.action, diff=change.diff,
+            raw_email_archive = path.casefold().startswith("inbox/email/")
+            result.append(dict(path=path, action=change.action,
+                               diff=None if raw_email_archive else change.diff,
+                               diff_omitted=raw_email_archive,
                                conflict=baseline.get(path) != digest))
         return dict(status="temporary" if result else "no_changes", changes=result)
 
