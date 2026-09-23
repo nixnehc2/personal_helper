@@ -20,7 +20,7 @@ def load_config(path=None):
         return {}
     except (ValueError, UnicodeError):
         raise ValueError("config.local.json must contain valid UTF-8 JSON") from None
-    allowed = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "AGENT_TIMEOUT_SECONDS"}
+    allowed = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_REQUEST_URL", "ANTHROPIC_MODEL", "AGENT_TIMEOUT_SECONDS"}
     if not isinstance(config, dict) or set(config) - allowed:
         raise ValueError("config.local.json contains unsupported configuration fields")
     if any(not isinstance(value, str) or not value.strip() for value in config.values()):
@@ -38,6 +38,11 @@ class Client:
         if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
             raise ValueError("ANTHROPIC_BASE_URL must be a plain HTTPS base URL")
         self.url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+        if settings.get("ANTHROPIC_REQUEST_URL"):
+            self.url = settings["ANTHROPIC_REQUEST_URL"]
+            endpoint = urllib.parse.urlsplit(self.url)
+            if endpoint.scheme != "https" or not endpoint.netloc or endpoint.username or endpoint.query or endpoint.fragment:
+                raise ValueError("ANTHROPIC_REQUEST_URL must be a plain HTTPS URL")
         self.model = settings.get("ANTHROPIC_MODEL", "mimo-v2.5-pro")
         try:
             self.timeout = float(settings.get("AGENT_TIMEOUT_SECONDS", "120"))
@@ -57,7 +62,10 @@ class Client:
                 raw = response.read(2_000_001)
                 if len(raw) > 2_000_000:
                     raise ValueError("API response too large")
-                result = json.loads(raw)
+                try:
+                    result = json.loads(raw)
+                except ValueError:
+                    raise RuntimeError("LLM endpoint returned non-JSON; check request URL (a website homepage is not a Messages API)") from None
         except urllib.error.HTTPError as error:
             raise RuntimeError(f"LLM HTTP {error.code}; check endpoint, token and model") from None
         except (urllib.error.URLError, TimeoutError):

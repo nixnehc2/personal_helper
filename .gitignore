@@ -5,3 +5,12 @@ __pycache__/
 !.env.example
 .venv/
 /config.local.json
+/tmp/
+/email_test/
+/memory/inbox/email/*.eml
+
+# Runtime-private Temporary Memory and transaction state
+.memory-temporary/
+.memory-transaction.json
+.memory-transaction.lock
+.memory-tmp-*

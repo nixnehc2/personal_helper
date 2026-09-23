@@ -1,8 +1,9 @@
 """Generic UTF-8 file tools; no knowledge-base taxonomy lives here."""
-import difflib
 import os
 from pathlib import Path, PureWindowsPath
 import stat
+
+from .memory import MemoryChange, MemoryPolicy, TEMPORARY_NAME
 
 LIMIT = 100_000
 
@@ -19,30 +20,52 @@ TOOLS = [
            {"path": "string", "start_line": "integer", "max_lines": "integer"}, ["path"]),
     schema("search_files", "Literal case-insensitive text search in .md/.txt files; bounded results.",
            {"query": "string", "path": "string"}, ["query"]),
-    schema("create_file", "Propose creating a new UTF-8 file. Human approval is mandatory; never overwrites.",
+    schema("create_file", "Propose a candidate new UTF-8 file. 只修改 Temporary Memory，不会直接修改 Formal Memory。",
            {"path": "string", "content": "string"}, ["path", "content"]),
-    schema("replace_text", "Propose one exact unique replacement. Human approval is mandatory.",
+    schema("replace_text", "Propose one exact unique candidate replacement. 只修改 Temporary Memory，不会直接修改 Formal Memory。",
            {"path": "string", "old_text": "string", "new_text": "string"},
            ["path", "old_text", "new_text"]),
+    schema("delete_memory", "Propose a candidate deletion. 只修改 Temporary Memory，不会直接修改 Formal Memory。", {"path": "string"}, ["path"]),
+    schema("show_memory_changes", "Show the current Temporary versus Formal diff.", {}, []),
+    schema("commit_memory_changes", "当前修改完成，请进入用户 review。Runtime shows the diff and handles yes/no; never grants approval itself.", {}, []),
+    schema("discard_memory_changes", "Request runtime confirmation to discard the entire transaction.", {}, []),
 ]
+
+# Keep the established file interfaces and provide the Memory vocabulary as aliases.
+for alias, original in (("read_memory", "read_file"), ("search_memory", "search_files"),
+                        ("write_memory", "create_file"), ("edit_memory", "replace_text")):
+    spec = next(s for s in TOOLS if s["name"] == original)
+    TOOLS.append(dict(spec, name=alias))
 
 
 class FileTools:
-    def __init__(self, root, confirm):
+    def __init__(self, root, confirm_batch=None, confirm_transaction=None):
         self.root = Path(root).resolve(strict=True)
         if not self.root.is_dir():
             raise ValueError("root must be a directory")
-        self.confirm = confirm
+        self.read_only = False
+        self.incoming_email = False
+        self.edit_learning = False
+        self.one_shot_paths = set()
+        self.limit_one_shot = False
         self.writes = []
-        self.denied = False
+        self.workspace_root = self.root / TEMPORARY_NAME
+        if confirm_batch is None or confirm_transaction is None:
+            from .main import confirm_batch as review_self, confirm_transaction as review_transaction
+            confirm_batch = confirm_batch or review_self
+            confirm_transaction = confirm_transaction or review_transaction
+        self.policy = MemoryPolicy(self, confirm_batch, confirm_transaction)
 
-    def path(self, value):
+    def _resolve(self, value, root, internal=False):
         if not isinstance(value, str) or "\x00" in value:
             raise ValueError("invalid path")
         parts = PureWindowsPath(value)
         if parts.drive or parts.root or ".." in parts.parts or ":" in value:
             raise ValueError("path outside root or invalid path")
-        candidate = self.root
+        components = value.replace("\\", "/").split("/")
+        if not internal and any(p.casefold().startswith(".memory-") for p in components):
+            raise ValueError("runtime-private memory path")
+        candidate = root
         for part in value.replace("\\", "/").split("/"):
             if part in ("", "."):
                 continue
@@ -57,9 +80,18 @@ class FileTools:
                     raise ValueError("reparse points are not allowed")
                 if candidate.is_file() and info.st_nlink > 1:
                     raise ValueError("hard links are not allowed")
-        if not candidate.resolve().is_relative_to(self.root):
+        if not candidate.resolve().is_relative_to(root):
             raise ValueError("path outside root")
         return candidate
+
+    def path(self, value, internal=False):
+        return self._resolve(value, self.root, internal)
+
+    def formal_path(self, value, internal=False):
+        return self._resolve(value, self.root, internal)
+
+    def workspace_path(self, value, internal=False):
+        return self._resolve(value, self.workspace_root, internal)
 
     def text(self, path):
         if not path.is_file():
@@ -71,109 +103,132 @@ class FileTools:
         return raw.decode("utf-8")
 
     def list_directory(self, path):
-        directory = self.path(path)
+        self.policy.ensure_no_transaction()
+        directory = self.workspace_path(path)
+        canonical = self.policy.canonical(path)
+        self.policy._check_snapshot()
         if not directory.is_dir():
             raise ValueError("directory not found")
-        entries = []
+        entries = {}
         with os.scandir(directory) as iterator:
             for entry in iterator:
-                if len(entries) == 200:
-                    return dict(entries=entries, truncated=True)
-                entries.append(dict(name=entry.name, is_directory=entry.is_dir(follow_symlinks=False)))
-        return dict(entries=entries, truncated=False)
+                entries[entry.name] = dict(name=entry.name, is_directory=entry.is_dir(follow_symlinks=False))
+                if len(entries) > 200:
+                    break
+        return dict(entries=list(entries.values())[:200], truncated=len(entries) > 200)
 
     def read_file(self, path, start_line=1, max_lines=200):
+        self.policy.ensure_no_transaction()
         if type(start_line) is not int or type(max_lines) is not int or start_line < 1 or not 1 <= max_lines <= 500:
             raise ValueError("invalid pagination")
-        lines = self.text(self.path(path)).splitlines(keepends=True)
+        canonical = self.policy.canonical(path)
+        folded = canonical.casefold()
+        if folded.endswith(".eml"):
+            raise ValueError("raw email must be decoded through parse_email")
+        if self.limit_one_shot and folded.startswith("knowledge/email_oneshots/") and not folded.endswith("/_index.md"):
+            if self.one_shot_paths and canonical not in self.one_shot_paths:
+                raise ValueError("drafting allows at most one one-shot")
+            self.one_shot_paths.add(canonical)
+        content = self.policy.current(canonical)
+        if content is None:
+            raise ValueError("file not found")
+        lines = content.splitlines(keepends=True)
         selected = "".join(lines[start_line - 1:start_line - 1 + max_lines])
-        return dict(path=path, start_line=start_line, total_lines=len(lines),
+        return dict(path=path, start_line=start_line, total_lines=len(lines), temporary=canonical in self.policy.changes,
                     content=selected[:20000], truncated=(start_line - 1 + max_lines < len(lines) or len(selected) > 20000))
 
     def search_files(self, query, path="."):
+        self.policy.ensure_no_transaction()
         if not query:
             raise ValueError("empty search query")
-        base = self.path(path)
+        base = self.workspace_path(path)
+        self.policy._check_snapshot()
+        canonical = self.policy.canonical(path)
+        prefix = "" if canonical == "." else canonical + "/"
         if not base.exists():
             raise ValueError("path not found")
-        pending, matches, skipped, scanned = [base], [], [], 0
-        while pending:
-            item = pending.pop()
+        todo, candidates, skipped = [base], set(), []
+        scanned, truncated = 0, False
+        while todo:
+            item = todo.pop()
             scanned += 1
             if scanned > 2000:
-                return dict(matches=matches, skipped=skipped, truncated=True)
+                truncated = True
+                break
+            relative = item.relative_to(self.workspace_root).as_posix()
             try:
-                item = self.path(item.relative_to(self.root).as_posix())
+                item = self.workspace_path(relative)
                 if item.is_dir():
                     with os.scandir(item) as entries:
                         for entry in entries:
-                            if len(pending) >= 2000:
-                                return dict(matches=matches, skipped=skipped, truncated=True)
-                            pending.append(Path(entry.path))
+                            if len(todo) >= 2000:
+                                truncated = True
+                                break
+                            todo.append(Path(entry.path))
+                else:
+                    candidates.add(relative)
+            except (OSError, ValueError) as error:
+                if len(skipped) < 20:
+                    skipped.append(dict(path=relative, error=str(error)))
+        matches = []
+        for relative in sorted(candidates):
+            if self.limit_one_shot and relative.casefold().startswith("knowledge/email_oneshots/") and not relative.casefold().endswith("/_index.md"):
+                continue
+            if Path(relative).suffix.lower() not in (".md", ".txt"):
+                continue
+            try:
+                content = self.policy.current(relative)
+                if content is None:
                     continue
-                if item.suffix.lower() not in (".md", ".txt"):
-                    continue
-                lines = self.text(item).splitlines()
-                for number, line in enumerate(lines, 1):
+                for number, line in enumerate(content.splitlines(), 1):
                     index = line.casefold().find(query.casefold())
                     if index >= 0:
-                        matches.append(dict(path=item.relative_to(self.root).as_posix(), line=number,
-                                            snippet=line[max(0, index - 80):index + 240]))
+                        matches.append(dict(path=relative, line=number, snippet=line[max(0, index - 80):index + 240],
+                                            temporary=relative in self.policy.changes))
                         if len(matches) >= 50:
                             return dict(matches=matches, skipped=skipped, truncated=True)
             except (OSError, ValueError) as error:
                 if len(skipped) < 20:
-                    skipped.append(dict(path=item.relative_to(self.root).as_posix(), error=str(error)))
-        return dict(matches=matches, skipped=skipped, truncated=False)
-
-    def approve(self, path, before, after):
-        if self.denied:
-            raise ValueError("writes disabled for this turn after user declined; do not retry")
-        changes = difflib.unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True),
-                                      fromfile=path + " (before)", tofile=path + " (after)")
-        diff = "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
-                       for line in changes)
-        if not self.confirm(path, diff):
-            self.denied = True
-            raise ValueError("user declined; no changes made")
-        return diff
+                    skipped.append(dict(path=relative, error=str(error)))
+        return dict(matches=matches, skipped=skipped, truncated=truncated)
 
     def create_file(self, path, content):
-        target = self.path(path)
-        if target.exists():
-            raise ValueError("file already exists")
-        if len(content.encode("utf-8")) > LIMIT:
-            raise ValueError("content too large")
-        diff = self.approve(path, "", content)
-        target = self.path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("x", encoding="utf-8", newline="") as stream:
-            stream.write(content)
-        self.writes.append(path)
-        return dict(success=True, path=path, diff=diff)
+        return self.change(MemoryChange(path, "create", content))
 
     def replace_text(self, path, old_text, new_text):
-        target = self.path(path)
-        before = self.text(target)
-        if not old_text:
-            raise ValueError("old_text must not be empty")
-        count = sum(before.startswith(old_text, n) for n in range(len(before)))
-        if count != 1:
-            raise ValueError(f"expected one match, found {count}")
-        after = before.replace(old_text, new_text, 1)
-        if after == before:
-            raise ValueError("no change")
-        if len(after.encode("utf-8")) > LIMIT:
-            raise ValueError("content too large")
-        diff = self.approve(path, before, after)
-        target = self.path(path)
-        if self.text(target) != before:
-            raise ValueError("file changed during approval; read and propose again")
-        with target.open("r+", encoding="utf-8", newline="") as stream:
-            stream.write(after)
-            stream.truncate()
-        self.writes.append(path)
-        return dict(success=True, path=path, diff=diff)
+        return self.change(MemoryChange(path, "replace", new_text, old_text))
+
+    def change(self, change):
+        if self.read_only:
+            raise ValueError("draft retrieval is read-only")
+        path = self.policy.canonical(change.target_path).casefold()
+        if self.edit_learning and path.startswith("history/email_threads/"):
+            raise ValueError("edited draft is NOT sent; do not add it to email thread history. Learn facts/style in their folders only")
+        result = self.policy.apply_memory_changes([change])[0]
+        if "error" in result:
+            raise ValueError(result["error"])
+        return result
+
+    def delete_memory(self, path):
+        return self.change(MemoryChange(path, "delete"))
+
+    def show_memory_changes(self):
+        return self.policy.show()
+
+    def commit_memory_changes(self):
+        if self.read_only:
+            raise ValueError("draft retrieval is read-only")
+        return self.policy.request_commit()
+
+    def discard_memory_changes(self):
+        if self.read_only:
+            raise ValueError("draft retrieval is read-only")
+        return self.policy.discard()
+
+    read_memory = read_file
+    search_memory = search_files
+    write_memory = create_file
+    edit_memory = replace_text
 
     def execute(self, name, arguments):
         try:
