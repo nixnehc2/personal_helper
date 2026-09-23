@@ -62,7 +62,7 @@ def smtp_deliver(message, settings, connect=None):
     connect = connect or smtplib.SMTP_SSL
     try:
         with connect(host, port, timeout=30,
-                     ssl_context=ssl.create_default_context()) as connection:
+                     context=ssl.create_default_context()) as connection:
             connection.login(account, password)
             connection.send_message(message)
     except smtplib.SMTPAuthenticationError:

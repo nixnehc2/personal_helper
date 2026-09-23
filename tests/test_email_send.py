@@ -14,9 +14,11 @@ from agent.tools import FileTools, TOOLS
 class FakeSMTP:
     messages = []
 
-    def __init__(self, *arguments, **keywords):
-        self.arguments = arguments
-        self.keywords = keywords
+    def __init__(self, host, port, *, timeout, context):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.context = context
 
     def __enter__(self):
         return self
