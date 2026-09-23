@@ -53,6 +53,7 @@ class MemoryPolicy:
         self.session = uuid.uuid4().hex
         self.snapshot = None
         with self._lock():
+            self._preserve_legacy_email_archives()
             self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
             self._save(False)
 
@@ -355,6 +356,8 @@ class MemoryPolicy:
             path = change.path
             target = self.files.workspace_path(path)
             raw_archive = path.casefold().startswith("inbox/email/") and target.suffix.lower() == ".eml"
+            if raw_archive:
+                raise ValueError("raw email archive is immutable and outside Memory review; reload the original email to repair its mirror")
             if path.split("/", 1)[0].casefold() in WRITABLE_FOLDERS and not raw_archive:
                 self._target(path)
             if target.is_file() and target.stat().st_size > 100000 and target.suffix.lower() in (".md", ".txt"):
@@ -424,22 +427,54 @@ class MemoryPolicy:
             self.files.writes.extend(change.path for change in changes.values())
             return dict(status="committed", paths=[change.path for change in changes.values()])
 
+    def _preserve_legacy_email_archives(self):
+        """Retain old pending raw archives before resetting Temporary at startup.
+
+        Only content-addressed EMLs are migrated; derived Memory still requires
+        review and follows the existing startup reset behavior.
+        """
+        directory = self.files.workspace_path("inbox/email")
+        if not directory.is_dir():
+            return
+        for item in directory.glob("*.eml"):
+            if not re.fullmatch(r"[0-9a-f]{64}\.eml", item.name):
+                continue
+            relative = f"inbox/email/{item.name}"
+            raw = self.files.workspace_path(relative).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != item.stem:
+                raise ValueError("legacy raw archive hash mismatch; original Temporary retained")
+            formal = self.files.formal_path(relative)
+            if formal.exists():
+                if formal.read_bytes() != raw:
+                    raise ValueError("raw archive hash collision or corruption")
+            else:
+                self._atomic_write(formal, raw)
+
     def archive_email(self, raw):
+        """Persist immutable source bytes immediately, independently of review."""
         digest = hashlib.sha256(raw).hexdigest()
         path = f"inbox/email/{digest}.eml"
         formal = self.files.formal_path(path)
         with self._lock():
-            self._ensure_memory_transaction()
+            self._check_snapshot()
             target = self.files.workspace_path(path)
-            if formal.exists() or target.exists():
-                if (formal.exists() and formal.read_bytes() != raw) or (target.exists() and target.read_bytes() != raw):
-                    raise ValueError("raw archive hash collision or corruption")
-                return dict(path=path, duplicate=True)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as stream:
-                stream.write(raw)
-            self.files.writes.append(path)
-            return dict(path=path, duplicate=False)
+            duplicate = formal.exists() or target.exists()
+            if (formal.exists() and formal.read_bytes() != raw) or (target.exists() and target.read_bytes() != raw):
+                raise ValueError("raw archive hash collision or corruption")
+            created = not formal.exists()
+            if created:
+                self._atomic_write(formal, raw)
+            if not target.exists():
+                self._atomic_write(target, raw)
+            # Add only this verified immutable source to an existing baseline.
+            # This also recovers an interrupted archive whose state save failed;
+            # never refresh other paths and hide external Memory edits.
+            if self._active():
+                baseline = self._state()["baseline"]
+                if path not in baseline:
+                    baseline[path] = digest
+                    self._save(True, baseline)
+            return dict(path=path, duplicate=duplicate)
 
 
 def apply_memory_changes(policy, changes):

@@ -84,11 +84,13 @@ python -m agent.email_index
 
 数据路径为 `EmailIndex.get(id)` → 按 UID 下载一封完整 RFC822 → `data/email/raw/<id>.eml` → `process_eml()` → 更新导入状态。附件保留在完整 EML 中，不另行提取；沿用既有 25 MiB 导入上限。连接采用只读文件夹及 `BODY.PEEK[]`，不会设置已读。下载校验账号、服务器、UIDVALIDITY、返回 UID、RFC822 长度，以及索引已有的 Message-ID；邮箱身份不匹配或邮件已删除时拒绝导入。
 
-原文缓存同目录保存 `<id>.json` 身份和 SHA-256 校验信息，只有两项都匹配才复用。缺失/损坏的缓存重新下载。下载及状态更新采用原子替换；每个 ID 的锁阻止并发重复处理。异常退出留下 `<id>.lock` 时，先确认导入进程已退出再手动删除。所有原文和缓存均位于 Git 忽略的 `data/email/` 下，授权码继续只从私有配置读取。
+原文缓存同目录保存 `<id>.json` 身份和 SHA-256 校验信息，只有两项都匹配才复用。缺失/损坏的缓存重新下载。下载及状态更新采用原子替换；每个 ID 的锁阻止并发重复处理。异常退出留下 `<id>.lock` 时，先确认导入进程已退出再手动删除。下载原文和校验缓存均位于 Git 忽略的 `data/email/` 下，授权码继续只从私有配置读取。
 
 `/email <path>` 也通过注册的 `email` Tool 调用同一个 `process_eml()`。Agent 自主调用本地 `email` Tool 时路径仍限于 Memory 根目录；只有用户显式 `/email` 命令可授权读取所指定的外部 `.eml` 文件。原有 `ingest_email()` 保留为兼容转发，原本地 EML CLI 继续可用。MIME 解析、Agent、Temporary Memory 和 review 使用原有流程。Agent 在工具调用中触发 EML 处理时使用独立消息列表，避免向模型发送尚未配对的 tool_use；客户端、Memory 工具和 Temporary Transaction 仍是同一份。处理邮件期间禁止再次调用导入工具，避免递归导入。
 
 仅 `process_eml()` 正常完成且没有工具错误/Memory 冲突时写入 `imported=true` 和 UTC `imported_at`。仅下载成功、原文已归档、模型/Memory/索引写入失败均不算成功，保持未导入；失败后再次使用同一命令会复用可信 EML，并重新完成处理，不因原文已归档而跳过。处理过程中出现过工具错误时保守地视为失败，即使模型随后结束回答也不标记成功。
+
+原始 EML 在处理开始时立即归档至 `memory/inbox/email/<sha256>.eml`，并同步到 Temporary 的镜像；它是源文件留存，不是 Agent 的记忆修改，不计入待审文件数、不展示 diff、不要求用户确认。只有派生记忆才进入 Temporary review。仅归档原文的邮件不会提示“Temporary 保留 1 个文件”。拒绝提交、取消 Temporary 或重启均保留原文，模型失败也不会删除已归档原文。启动时会保留旧版仅存于 Temporary 中且 SHA-256 文件名校验通过的 EML；这不提交旧的派生记忆。
 
 **imported 表示 EML 已处理，不表示 Formal Memory 已提交。** 用户 review 回答 `no` 是现有流程的正常结果：Temporary 保留，导入仍可完成；后续提交/取消/新进程重置 Temporary 不会回滚 Email Index 的 imported 状态。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
 
@@ -140,7 +142,7 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 | `commit_memory_changes()` | Runtime 显示 diff、等待精确 yes，并执行 self 额外审阅 |
 | `discard_memory_changes()` | Runtime 确认后放弃整笔事务 |
 
-工具只接受知识库相对路径。所有工具共享解析后边界检查，拒绝 `..`、绝对路径、盘符、ADS、符号链接、junction/reparse point 和硬链接。提交前重新检查全部路径和文件基线，检测外部编辑。根协议和根索引由人维护；原始邮件归档只能通过导入接口进入同一事务。拒绝和工具错误会作为明确错误回传给模型。
+工具只接受知识库相对路径。所有工具共享解析后边界检查，拒绝 `..`、绝对路径、盘符、ADS、符号链接、junction/reparse point 和硬链接。提交前重新检查全部路径和文件基线，检测外部编辑。根协议和根索引由人维护；原始邮件只能通过导入接口立即追加为不可变归档，不进入 Memory 审批事务。拒绝和工具错误会作为明确错误回传给模型。
 
 ## 限制与取舍
 

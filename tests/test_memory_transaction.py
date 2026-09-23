@@ -89,18 +89,69 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual((self.root / "pending/preference.md").read_text(encoding="utf-8"), "candidate")
         self.assert_synchronized()
 
-    def test_show_omits_raw_email_archive_diff(self):
+    def test_raw_archive_is_immediate_and_excluded_from_review(self):
         archive = self.files.policy.archive_email(b"raw email")
         result = self.files.show_memory_changes()
-        change = next(item for item in result["changes"] if item["path"] == archive["path"])
-        self.assertIsNone(change["diff"])
-        self.assertTrue(change["diff_omitted"])
+        self.assertEqual(result["changes"], [])
+        self.assertFalse(self.state()["active"])
+        self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
+        self.assertEqual(self.files.commit_memory_changes()["status"], "no_changes")
+        self.assertEqual(self.approvals, [])
 
         self.files.create_file("pending/candidate.md", "candidate")
         result = self.files.show_memory_changes()
         change = next(item for item in result["changes"] if item["path"] == "pending/candidate.md")
         self.assertIn("+candidate", change["diff"])
         self.assertFalse(change["diff_omitted"])
+
+    def test_archive_during_transaction_does_not_commit_or_count_derived_changes(self):
+        self.files.create_file("projects/b.md", "candidate")
+        archive = self.files.policy.archive_email(b"raw email")
+        self.assertEqual(list(self.files.policy.changes), ["projects/b.md"])
+        self.assertFalse((self.root / "projects/b.md").exists())
+        self.files.commit_memory_changes()
+        self.assertEqual(self.approvals, [("commit", ["projects/b.md"])])
+        self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
+
+    def test_archive_survives_discard_and_restart(self):
+        self.files.create_file("projects/b.md", "candidate")
+        archive = self.files.policy.archive_email(b"raw email")
+        self.files.policy.discard(explicit=True)
+        self.files = self.open_files()
+        self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
+        self.assertFalse((self.root / "projects/b.md").exists())
+        self.assertEqual(self.files.show_memory_changes()["changes"], [])
+        self.assertTrue(self.files.policy.archive_email(b"raw email")["duplicate"])
+
+    def test_archive_does_not_hide_external_memory_conflict(self):
+        self.files.create_file("projects/b.md", "candidate")
+        (self.root / "projects/a.md").write_text("external change", encoding="utf-8")
+        self.files.policy.archive_email(b"raw email")
+        with self.assertRaisesRegex(ValueError, "Formal Memory changed"):
+            self.files.commit_memory_changes()
+        self.assertFalse((self.root / "projects/b.md").exists())
+
+    def test_legacy_pending_raw_preserved_without_promoting_memory(self):
+        import hashlib
+        raw = b"legacy pending raw"
+        path = f"inbox/email/{hashlib.sha256(raw).hexdigest()}.eml"
+        target = self.files.workspace_root / path
+        target.parent.mkdir(parents=True)
+        target.write_bytes(raw)
+        (self.files.workspace_root / "projects/b.md").write_text("unapproved", encoding="utf-8")
+        self.files = self.open_files()
+        self.assertEqual((self.root / path).read_bytes(), raw)
+        self.assertFalse((self.root / "projects/b.md").exists())
+        self.assertEqual(self.files.show_memory_changes()["changes"], [])
+
+    def test_raw_mirror_cannot_be_changed_via_commit(self):
+        archive = self.files.policy.archive_email(b"raw email")
+        self.files.create_file("projects/b.md", "candidate")
+        (self.files.workspace_root / archive["path"]).write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "raw email archive is immutable"):
+            self.files.commit_memory_changes()
+        self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
+        self.assertEqual(self.approvals, [])
 
     def test_new_session_resets_stale_temporary_from_formal(self):
         self.files.create_file("projects/b.md", "temporary")

@@ -1,6 +1,7 @@
 from email.message import EmailMessage
 from email import policy
 from pathlib import Path
+from unittest.mock import Mock
 import tempfile
 import unittest
 
@@ -52,7 +53,10 @@ class EmailMemoryTests(unittest.TestCase):
         result = ingest_email(self.mail, ScriptClient([]), self.files, emit=lambda _: None)
         archived = self.files.workspace_root / result["raw"]["path"]
         self.assertEqual(archived.read_bytes(), self.mail.read_bytes())
-        self.assertFalse((self.root / result["raw"]["path"]).exists())
+        self.assertEqual((self.root / result["raw"]["path"]).read_bytes(), self.mail.read_bytes())
+        self.assertEqual(result["temporary_written"], [])
+        self.assertEqual(self.files.show_memory_changes()["changes"], [])
+        self.assertNotIn(result["raw"]["path"], self.files.writes)
         second = ingest_email(self.mail, ScriptClient([]), self.files, emit=lambda _: None)
         self.assertEqual(second["status"], "duplicate_skipped")
         self.assertEqual(list((self.root / "projects").glob("*.md")), [self.root / "projects/_INDEX.md"])
@@ -69,6 +73,17 @@ class EmailMemoryTests(unittest.TestCase):
                          [self.files.workspace_root / second["raw"]["path"]])
         self.assertEqual((self.files.workspace_root / "projects/forced.md").read_text(encoding="utf-8"),
                          "forced candidate")
+
+    def test_raw_only_import_does_not_prompt_or_report_temporary_changes(self):
+        self.files.policy.confirm_transaction = Mock(side_effect=AssertionError("raw must not prompt"))
+        output = []
+        result = ingest_email(self.mail, ScriptClient([[("commit_memory_changes", {})]]),
+                              self.files, emit=output.append)
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(result["temporary_written"], [])
+        self.assertFalse(any("Temporary 保留" in line for line in output))
+        self.assertTrue((self.root / result["raw"]["path"]).exists())
+        self.files.policy.confirm_transaction.assert_not_called()
 
     def test_project_and_existing_thread(self):
         client = ScriptClient([[create("projects/launch.md", "Launch October 1; source one"),

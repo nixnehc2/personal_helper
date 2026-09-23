@@ -48,7 +48,7 @@ python -m agent.email_cli --root memory ingest "email_test/某封邮件.eml"
 
 Temporary 在同一对话进程内持久化。推荐使用 `agent.main` 的 `/email` 导入并在 `no` 后继续反馈；一次性 `email_cli ingest` 结束后不能继续反馈，下一次命令会从 Formal Memory 重新初始化。事务生命周期详见 README。
 
-原始 `.eml` 归档属于保留的解析/归档流程，不是 Agent 的 Memory 修改：导入时仍立即追加不可变原文；即使 Memory 提交被拒绝，原文也保留。派生的历史、个人资料、索引、风格和案例全部经过 Temporary 与用户审批。根协议与根索引仍由人维护。
+原始 `.eml` 归档属于保留的解析/归档流程，不是 Agent 的 Memory 修改：导入时立即追加到正式目录 `inbox/email/<sha256>.eml` 并同步 Temporary 镜像，不进入待审计数、diff 或确认；即使 Memory 提交被拒绝、取消或进程重启，原文也保留。派生的历史、个人资料、索引、风格和案例全部经过 Temporary 与用户审批。根协议与根索引仍由人维护。
 
 ## 邮件处理
 
