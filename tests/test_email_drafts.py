@@ -70,7 +70,8 @@ class DraftTests(unittest.TestCase):
         self.assertIn("项目 A", outcomes[0]["content"])
         self.assertTrue(all("error" in r for r in outcomes[1:]))
         self.assertEqual(self.files.show_memory_changes(), before)
-        self.assertNotIn("send_email", {s["name"] for s in TOOLS})
+        from agent.email_drafts import READ_TOOLS
+        self.assertNotIn("send_email", READ_TOOLS)
 
     def test_failures_preserve_draft_and_active_id(self):
         self.edit()

@@ -35,10 +35,16 @@ class DraftStore:
         try:
             draft = json.loads(path.read_text(encoding="utf-8"))
             validate_content({key: draft[key] for key in ("to", "subject", "body")})
-            if type(draft["id"]) is not int or draft["id"] != draft_id or draft["status"] != "draft":
+            if (type(draft["id"]) is not int or draft["id"] != draft_id
+                    or draft["status"] not in ("draft", "sent")):
                 raise ValueError("invalid draft")
             if not all(isinstance(draft[key], str) for key in ("created_at", "updated_at")):
                 raise ValueError("invalid timestamps")
+            if draft["status"] == "sent":
+                if not isinstance(draft["sent_at"], str) or not isinstance(draft["sent_message_id"], str):
+                    raise ValueError("invalid sent metadata")
+            elif "sent_at" in draft or "sent_message_id" in draft:
+                raise ValueError("invalid draft")
             return draft
         except (ValueError, KeyError, TypeError):
             raise ValueError(f"Draft #{draft_id} 格式损坏，原文件已保留") from None
@@ -59,6 +65,13 @@ class DraftStore:
                          created_at=previous["created_at"] if previous else now, updated_at=now)
             EmailIndex(self.path / f"{draft_id}.json").write(draft)
             return draft
+
+    def mark_sent(self, snapshot, message_id):
+        """Record the exact user-approved snapshot; caller must hold the store lock."""
+        now = datetime.now(timezone.utc).isoformat()
+        sent = dict(snapshot, status="sent", sent_at=now, sent_message_id=message_id, updated_at=now)
+        EmailIndex(self.path / f"{snapshot['id']}.json").write(sent)
+        return sent
 
 
 def validate_content(content):

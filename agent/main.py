@@ -35,8 +35,9 @@ Make minimal edits and update navigation when necessary. Root protocol/index are
 Report partial completion honestly. Do not infer a user's personal facts. Always answer in Chinese.
 For email writing requests call edit_email and return its complete saved draft. For follow-up edits,
 pass active_email_draft_id; omit draft_id only when the user requests a new email.
-Drafts are not sent messages or established personal facts. There is no email sending capability.
-If asked to send, explain that this stage only saves local drafts; never claim a message was sent.
+If the user asks to send an email, call send_email with the saved draft ID only. The tool performs
+Runtime yes/no confirmation and SMTP itself; do not ask for confirmation first and never claim success
+unless the tool returns success. Drafts are not established personal facts.
 """
 
 HISTORY_NAME = ".memory-agent-history.jsonl"
@@ -90,6 +91,8 @@ def tool_summary(call):
         return prefix + f" | 邮件 ID={brief(arguments.get('id'))}"
     if name == "edit_email":
         return prefix + f" | 草稿 ID={brief(arguments.get('draft_id', '新建'))} | 要求={brief(arguments.get('instruction'))} | 仅本地草稿"
+    if name == "send_email":
+        return prefix + f" | 草稿 ID={brief(arguments.get('draft_id'))} | 待用户确认后发送"
     if name == "email":
         return prefix + f" | EML={brief(arguments.get('path'))}"
     if name in ("create_file", "replace_text", "write_memory", "edit_memory", "delete_memory"):
@@ -120,6 +123,22 @@ def confirm_transaction(action, changes):
         return "yes" if input(question) == "yes" else "no"
     except (EOFError, KeyboardInterrupt):
         return "no"
+
+
+def confirm_email(draft):
+    print("\n=== 准备发送邮件 ===")
+    print(f"Draft: #{draft['id']}")
+    print(f"To: {draft['to']}")
+    print(f"Subject: {draft['subject']}")
+    if not draft["subject"].strip():
+        print("警告：主题为空。")
+    print()
+    print(safe_display(draft["body"]))
+    try:
+        # Deliberately strict: email text can never approve sending.
+        return input("\n是否发送？(yes/no): ").strip().lower() == "yes"
+    except (EOFError, KeyboardInterrupt):
+        return False
 
 
 def confirm_batch(changes):
@@ -179,7 +198,8 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     system += f"\nRuntime: current Temporary Transaction contains {len(files.policy.changes)} changed file(s). Use show_memory_changes to inspect it."
     tool_specs = getattr(files, "tool_specs", TOOLS)
     if files.processing_eml:
-        tool_specs = [spec for spec in tool_specs if spec["name"] not in ("email", "import_email", "edit_email")]
+        tool_specs = [spec for spec in tool_specs
+                      if spec["name"] not in ("email", "import_email", "edit_email", "send_email")]
     messages.append(dict(role="user", content=user))
     try:
         for _ in range(max_steps):
@@ -214,7 +234,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                         result = files.execute(call.get("name"), call.get("input"))
                 else:
                     result = files.execute(call.get("name"), call.get("input"))
-                if call.get("name") == "edit_email" and "error" not in result:
+                if call.get("name") in ("edit_email", "send_email") and "error" not in result:
                     emit(safe_display(result["display"]))
                 if call.get("name") == "show_memory_changes" and "error" not in result:
                     for change in result["changes"]:
@@ -289,6 +309,10 @@ def parse_tool_command(user):
         if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() or int(parts[1]) <= 0:
             raise ValueError("用法：/import_email <正整数 ID>")
         return "import_email", {"id": int(parts[1])}
+    if parts and parts[0] == "/send_email":
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() or int(parts[1]) <= 0:
+            raise ValueError("用法：/send_email <正整数草稿 ID>")
+        return "send_email", {"draft_id": int(parts[1])}
     email = parse_email_command(user)
     if email is not None:
         path, authored, reprocess = email
@@ -318,7 +342,7 @@ def main():
         print("启动失败：" + str(error))
         return 1
     print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/import_email <id> 导入单封邮件，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
-    print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求；仅保存本地，不发送。")
+    print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求。/send_email <草稿 ID> 展示并确认后通过 SMTP 发送。")
     print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
     while True:
@@ -357,7 +381,7 @@ def main():
                 elif name == "update_email":
                     print(safe_display(result["table"]))
                     print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
-                elif name == "edit_email":
+                elif name in ("edit_email", "send_email"):
                     print(safe_display(result["display"]))
                 else:
                     print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))

@@ -63,7 +63,7 @@ python -m agent.email_index
 
 三个入口共用 `agent.email_index.update_email_index()`：CLI 直接调用核心函数，`/update_email`（及兼容写法）通过 `FileTools.execute("update_email", {})` 显式调用同一个 Agent Tool，Tool 再调用核心函数并限制展示为 100 条。旧 Python 函数 `update_email()` 仅作为兼容转发。IMAP 与索引写入只在核心层执行；Tool 不接收 ID、imported 或索引路径等参数，Agent 无法通过该接口自行覆盖状态。
 
-私有 `config.local.json` 新增字符串字段：`EMAIL_ACCOUNT`、`EMAIL_AUTH_CODE`；可选 `EMAIL_IMAP_HOST`（默认 `imap.qq.com`）、`EMAIL_IMAP_PORT`（默认 `993`）、`EMAIL_FOLDER`（默认 `INBOX`）。也支持同名环境变量，本地配置优先。QQ 邮箱需要开启 IMAP，使用授权码登录。授权码不会进入工具返回值或模型消息。
+私有 `config.local.json` 新增字符串字段：`EMAIL_ACCOUNT`、`EMAIL_AUTH_CODE`；可选 `EMAIL_IMAP_HOST`（默认 `imap.qq.com`）、`EMAIL_IMAP_PORT`（默认 `993`）、`EMAIL_FOLDER`（默认 `INBOX`）、`EMAIL_SMTP_HOST`（默认 `smtp.qq.com`）、`EMAIL_SMTP_PORT`（默认 `465`）。也支持同名环境变量，本地配置优先。QQ 邮箱需要开启 IMAP/SMTP，使用授权码登录。授权码不会进入工具返回值或模型消息。
 
 索引位于项目根目录的 `data/email/index.json`，与 Memory 独立且被 Git 忽略。默认同步收件箱；其他文件夹需通过私有配置选择，不自动遍历所有文件夹。索引包含递增 `id`、`imap_uid`、`message_id`、`subject`、`from`、`date`、`imported`、`imported_at`，另存邮箱/文件夹/UIDVALIDITY 用于隔离 UID。先按同邮箱同文件夹同 UIDVALIDITY 下的 UID 匹配，再按非空 Message-ID 匹配。服务器重置 UID 后仍可通过 Message-ID 保留本地 ID；缺失 Message-ID 时无法跨 UIDVALIDITY 识别原邮件。相同 Message-ID 视为同一封邮件。
 
@@ -94,7 +94,7 @@ python -m agent.email_index
 
 **imported 表示 EML 已处理，不表示 Formal Memory 已提交。** 用户 review 回答 `no` 是现有流程的正常结果：Temporary 保留，导入仍可完成；后续提交/取消/新进程重置 Temporary 不会回滚 Email Index 的 imported 状态。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
 
-本阶段没有新增编辑、草稿、SMTP、发送、自动导入或自动回复功能。测试使用模拟 IMAP 和模型及临时目录，不导入真实个人邮件。
+本阶段没有新增自动导入或自动回复功能。测试使用模拟 IMAP、SMTP 和模型及临时目录，不导入真实个人邮件。
 
 每次工具调用会显示简短参数：读取的文件与行范围、搜索关键词与范围、列出的目录，以及写入目标文件。长参数会截短，换行等字符会转义，避免日志刷屏；完整修改仍在确认 diff 中展示。例如：
 
@@ -169,11 +169,11 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 
 `/edit_email <要求>` 新建草稿；`/edit_email <ID> <要求>` 修改指定草稿。普通聊天的写邮件请求也由 Agent 调用同一个 `edit_email(instruction, draft_id?)` 工具。省略 ID 总是新建，后续自然语言修改由 Agent 使用会话中的 `active_email_draft_id` 指向原草稿。`/clear` 和重启清空当前草稿指向，已保存草稿仍可按 ID 修改。
 
-每份草稿保存在项目目录 `data/email/drafts/<ID>.json`，字段为 `id/to/subject/body/status/created_at/updated_at`，状态始终为 `draft`。每次成功修改覆盖当前版本，保留创建时间；模型失败、输出不完整或并发修改冲突不会覆盖原草稿。草稿目录已被 Git 忽略，不上传个人邮件。
+每份草稿保存在项目目录 `data/email/drafts/<ID>.json`，字段为 `id/to/subject/body/status/created_at/updated_at`；发送成功后增加 `sent_at/sent_message_id`，状态变为 `sent`。每次成功修改覆盖当前版本，保留创建时间；模型失败、输出不完整或并发修改冲突不会覆盖原草稿。草稿目录已被 Git 忽略，不上传个人邮件。
 
 固定邮件写作 Prompt 位于 `agent/email_drafts.py`。写作复用当前模型客户端、完整有效对话上下文和现有 Memory 读取工具，可以参考 Temporary 候选内容，但不能当作已确认事实。内部流程只允许读取，不写 Memory；普通对话中的 Memory 学习仍走原 Temporary 流程。未知邮箱保持空值，用户当前要求优先于历史习惯。
 
-每次工具成功都返回并展示完整草稿。第三阶段没有发送工具、SMTP 或远程草稿箱操作，即使要求“直接发吧”也不能发送。自动测试使用模拟模型，验证存储、入口、上下文和权限边界；实际行文质量和模型对自然语言修改的判断仍需人工验收。
+每次编辑成功都返回并展示完整草稿。发送使用 `/send_email <草稿 ID>` 或 Agent 调用同一个 `send_email(draft_id)` 工具；工具只接受已保存草稿 ID，不接收临时正文。Runtime 展示完整快照并要求输入 `yes` 才继续，`no` 或中断不会连接 SMTP。确认期间发送的就是展示的快照；SMTP 成功后才写入 `sent` 状态，失败保持 `draft` 可重试，已发送草稿会被拒绝且不再弹出确认。V1 仅支持纯文本 To/Subject/Body，不支持附件、HTML、CC/BCC、回复/转发、定时或批量发送。自动测试使用模拟模型和 SMTP，验证存储、入口、上下文和权限边界；实际行文质量、模型判断和真实 QQ SMTP 行为仍需人工验收。
 
 草稿输出接受纯 JSON 或完整的 JSON 代码围栏。若模型返回普通正文、解释文字或不完整字段，Runtime 会提示并请求模型纠正一次；仍不合规则报错，校验成功前不保存草稿。网络错误和被截断的输出不触发这次格式纠正。
 
