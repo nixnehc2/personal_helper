@@ -283,6 +283,13 @@ def main():
             continue
         if not user:
             continue
+        if user in ("update_email", "update_email()", "/update_email"):
+            print("同步邮箱……")
+            result = files.execute("update_email", {})
+            print(safe_display(result.get("error", result.get("table", ""))))
+            if "error" not in result:
+                print(f"新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
+            continue
         history.append("user_input", text=user)
         transcript_start = len(messages)
         try:

@@ -2,7 +2,7 @@
 
 ## 范围
 
-完成 Phase A–F：统一 Memory Temporary Transaction、MIME parser、本地导入、起草、编辑学习。Phase G 的 QQ IMAP/SMTP 按计划留待人工验收后接入；当前没有发送接口，草稿和最终正文均不会发送。
+完成 Phase A–F：统一 Memory Temporary Transaction、MIME parser、本地导入、起草、编辑学习。新增独立的 QQ IMAP 邮件目录索引：`python -m agent.email_index` 或聊天输入 `update_email`，只同步邮件头、稳定本地 ID 和导入状态。配置与索引说明见 README。未连接索引到 EML 导入，未接入 SMTP；当前没有发送接口，草稿和最终正文均不会发送。
 
 原有资料保留。新增的正式 memory 文件是协议、索引和空主题文件；测试所得事实只写到 `tmp/` 下，不写入正式个人资料。`email_test/`、`tmp/`、原始 `.eml` 和本地配置均已加入 Git 忽略规则。本阶段没有提交或上传资料。
 

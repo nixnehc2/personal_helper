@@ -20,7 +20,8 @@ def load_config(path=None):
         return {}
     except (ValueError, UnicodeError):
         raise ValueError("config.local.json must contain valid UTF-8 JSON") from None
-    allowed = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_REQUEST_URL", "ANTHROPIC_MODEL", "AGENT_TIMEOUT_SECONDS"}
+    allowed = {"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_REQUEST_URL", "ANTHROPIC_MODEL", "AGENT_TIMEOUT_SECONDS",
+               "EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_ACCOUNT", "EMAIL_AUTH_CODE", "EMAIL_FOLDER"}
     if not isinstance(config, dict) or set(config) - allowed:
         raise ValueError("config.local.json contains unsupported configuration fields")
     if any(not isinstance(value, str) or not value.strip() for value in config.values()):

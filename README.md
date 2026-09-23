@@ -49,7 +49,25 @@ python -m agent.main --root memory
 
 `self/` 在统一确认后还有额外审阅。全部 self 修改均获准才提交整笔事务；部分接受或拒绝不落盘，整个 Temporary 保留。审阅时编辑的内容先保存在 Temporary，需要再次 commit 确认新 diff。
 
-邮件功能见 [EMAIL-V1.md](EMAIL-V1.md)：提供本地 `.eml` 解析、导入、起草与编辑学习；尚不连接真实邮箱或发送邮件。
+邮件功能见 [EMAIL-V1.md](EMAIL-V1.md)：提供本地 `.eml` 解析、导入、起草与编辑学习；新增 IMAP 邮件头索引，不发送邮件。
+
+## 邮箱目录同步（第一阶段）
+
+无需模型或 Memory 即可运行：
+
+```powershell
+python -m agent.email_index
+```
+
+聊天中输入 `update_email`、`update_email()` 或 `/update_email` 可直接同步；Agent 也可调用无参数工具 `update_email()`。返回 ID、Subject、From、Date、已导入/未导入状态。仅获取邮件头，不下载完整 EML、正文或附件，不调用导入流程，不修改 Memory。
+
+私有 `config.local.json` 新增字符串字段：`EMAIL_ACCOUNT`、`EMAIL_AUTH_CODE`；可选 `EMAIL_IMAP_HOST`（默认 `imap.qq.com`）、`EMAIL_IMAP_PORT`（默认 `993`）、`EMAIL_FOLDER`（默认 `INBOX`）。也支持同名环境变量，本地配置优先。QQ 邮箱需要开启 IMAP，使用授权码登录。授权码不会进入工具返回值或模型消息。
+
+索引位于项目根目录的 `data/email/index.json`，与 Memory 独立且被 Git 忽略。默认同步收件箱；其他文件夹需通过私有配置选择，不自动遍历所有文件夹。索引包含递增 `id`、`imap_uid`、`message_id`、`subject`、`from`、`date`、`imported`、`imported_at`，另存邮箱/文件夹/UIDVALIDITY 用于隔离 UID。先按同邮箱同文件夹同 UIDVALIDITY 下的 UID 匹配，再按非空 Message-ID 匹配。服务器重置 UID 后仍可通过 Message-ID 保留本地 ID；缺失 Message-ID 时无法跨 UIDVALIDITY 识别原邮件。相同 Message-ID 视为同一封邮件。
+
+新记录始终 `imported=false`、`imported_at=null`；重复同步保留两项状态和原 ID。远端删除的邮件保留历史索引，不复用编号；本阶段不跟踪删除状态，也不把既有 EML 归档自动标记为已导入。
+
+连接中断时不写索引；单封邮件读取/解析失败会报告跳过 UID，并在下次同步重试。写入采用同目录临时文件与原子替换，损坏的旧索引会报错并保留，文件锁阻止同时写入。异常杀进程留下 `index.lock` 时，确认没有同步进程后可手工删除锁文件。独立命令显示完整列表；聊天命令及工具最多展示本地 ID 最大的 100 条，并明确标记截断和总数，完整记录始终保存在索引中。每批最多读取 100 封邮件头。索引元信息属于不可信邮件内容。
 
 每次工具调用会显示简短参数：读取的文件与行范围、搜索关键词与范围、列出的目录，以及写入目标文件。长参数会截短，换行等字符会转义，避免日志刷屏；完整修改仍在确认 diff 中展示。例如：
 
