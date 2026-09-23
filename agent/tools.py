@@ -41,8 +41,8 @@ for alias, original in (("read_memory", "read_file"), ("search_memory", "search_
 
 class FileTools:
     def update_email(self):
-        from .email_index import format_table, update_email
-        result = update_email()
+        from .email_index import format_table, update_email_index
+        result = dict(update_email_index())
         result["truncated"] = result["total"] > 100
         result["emails"] = result["emails"][-100:]
         result["table"] = format_table(result["emails"])

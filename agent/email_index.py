@@ -145,7 +145,12 @@ def format_table(rows):
     return "\n".join(lines)
 
 
-def update_email(config=None, index_path=INDEX_PATH):
+def update_email_index(config=None, index_path=INDEX_PATH):
+    """Single sync core used by the CLI and registered Agent tool.
+
+    Only this layer fetches metadata and persists index state. Entry points may
+    format or limit the returned rows, but never assign IDs or import status.
+    """
     settings = dict(os.environ)
     settings.update(load_config() if config is None else config)
     source, metadata, skipped = fetch_metadata(settings)
@@ -153,10 +158,15 @@ def update_email(config=None, index_path=INDEX_PATH):
     return dict(added=added, total=len(rows), skipped_uids=skipped, emails=rows, table=format_table(rows))
 
 
+def update_email(config=None, index_path=INDEX_PATH):
+    """Compatibility for existing Python callers; delegates to the same core."""
+    return update_email_index(config=config, index_path=index_path)
+
+
 def main():
     try:
         print("同步邮箱……")
-        result = update_email()
+        result = update_email_index()
         print(result["table"])
         print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
         return 0

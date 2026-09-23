@@ -61,6 +61,8 @@ python -m agent.email_index
 
 聊天中输入 `update_email`、`update_email()` 或 `/update_email` 可直接同步；Agent 也可调用无参数工具 `update_email()`。返回 ID、Subject、From、Date、已导入/未导入状态。仅获取邮件头，不下载完整 EML、正文或附件，不调用导入流程，不修改 Memory。
 
+三个入口共用 `agent.email_index.update_email_index()`：CLI 直接调用核心函数，`/update_email`（及兼容写法）通过 `FileTools.execute("update_email", {})` 显式调用同一个 Agent Tool，Tool 再调用核心函数并限制展示为 100 条。旧 Python 函数 `update_email()` 仅作为兼容转发。IMAP 与索引写入只在核心层执行；Tool 不接收 ID、imported 或索引路径等参数，Agent 无法通过该接口自行覆盖状态。
+
 私有 `config.local.json` 新增字符串字段：`EMAIL_ACCOUNT`、`EMAIL_AUTH_CODE`；可选 `EMAIL_IMAP_HOST`（默认 `imap.qq.com`）、`EMAIL_IMAP_PORT`（默认 `993`）、`EMAIL_FOLDER`（默认 `INBOX`）。也支持同名环境变量，本地配置优先。QQ 邮箱需要开启 IMAP，使用授权码登录。授权码不会进入工具返回值或模型消息。
 
 索引位于项目根目录的 `data/email/index.json`，与 Memory 独立且被 Git 忽略。默认同步收件箱；其他文件夹需通过私有配置选择，不自动遍历所有文件夹。索引包含递增 `id`、`imap_uid`、`message_id`、`subject`、`from`、`date`、`imported`、`imported_at`，另存邮箱/文件夹/UIDVALIDITY 用于隔离 UID。先按同邮箱同文件夹同 UIDVALIDITY 下的 UID 匹配，再按非空 Message-ID 匹配。服务器重置 UID 后仍可通过 Message-ID 保留本地 ID；缺失 Message-ID 时无法跨 UIDVALIDITY 识别原邮件。相同 Message-ID 视为同一封邮件。

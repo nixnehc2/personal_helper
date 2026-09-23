@@ -130,7 +130,7 @@ class IndexTests(unittest.TestCase):
         self.mailbox.headers = {str(i).encode(): f"Message-ID: <{i}>\r\n\r\n".encode() for i in range(1, 206)}
         result = self.sync()
         self.assertEqual(result["total"], 205)
-        with patch("agent.email_index.update_email", return_value=result):
+        with patch("agent.email_index.update_email_index", return_value=result):
             displayed = FileTools.update_email(object())
         self.assertTrue(displayed["truncated"])
         self.assertEqual(len(displayed["emails"]), 100)

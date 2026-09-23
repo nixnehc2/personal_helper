@@ -288,7 +288,7 @@ def main():
             result = files.execute("update_email", {})
             print(safe_display(result.get("error", result.get("table", ""))))
             if "error" not in result:
-                print(f"新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
+                print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
             continue
         history.append("user_input", text=user)
         transcript_start = len(messages)
