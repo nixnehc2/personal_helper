@@ -19,7 +19,7 @@ content 必须包含脱离原对话也能理解的完整执行指令，不依赖
 不能猜测导师邮箱、目标邮件 Message-ID 或缺失的必要时间；先查已有信息，仍不明确则询问。
 根据需求生成结构化时间配置或五字段 Cron；不能准确表达则明确说明，不替换为近似周期。
 成功后展示规则编号、触发条件、执行指令、持续方式、状态；定时规则同时展示工具返回的时区和时间预览。
-必须明确告知：规则已保存；手动启动检查器可将定时事件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。不得宣称将自动检查或发送提醒。
+必须明确告知：规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。不得宣称将自动检查或发送提醒。
 Before answering, asking a clarification question, or making a tool call, determine whether its
 correctness depends on user-specific information. This applies to final answer content and to every
 intermediate value or tool argument, including identity, preferences, contact details, project

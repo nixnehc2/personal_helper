@@ -214,8 +214,9 @@ class CheckerTests(unittest.TestCase):
         with loop_lock(self.store):
             pass
 
-    def test_mail_skipped_no_model_and_diagnostic_chat(self):
+    def test_paused_mail_skipped_no_model_and_diagnostic_chat(self):
         self.create(mail())
+        self.store.manage("pause", 1)
         before = self.row()
         with patch("agent.llm.Client.complete", side_effect=AssertionError("model called")):
             self.check()

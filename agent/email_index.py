@@ -140,7 +140,7 @@ def fetch_metadata(settings):
         for start in range(0, len(uids), 100):
             batch = uids[start:start + 100]
             stage = "获取邮件头"
-            status, parts = connection.uid("fetch", b",".join(batch), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)])")
+            status, parts = connection.uid("fetch", b",".join(batch), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE IN-REPLY-TO REFERENCES)])")
             if status != "OK":
                 skipped.extend(uid.decode("ascii") for uid in batch)
                 continue
@@ -154,7 +154,8 @@ def fetch_metadata(settings):
                 try:
                     message = BytesHeaderParser(policy=policy.default).parsebytes(headers[uid])
                     rows.append(dict(imap_uid=uid.decode("ascii"), message_id=str(message.get("Message-ID", "")).strip(),
-                                     subject=str(message.get("Subject", "")), **{"from": str(message.get("From", ""))}, date=str(message.get("Date", ""))))
+                                     subject=str(message.get("Subject", "")), **{"from": str(message.get("From", ""))}, date=str(message.get("Date", "")),
+                                     in_reply_to=str(message.get("In-Reply-To", "")), references=str(message.get("References", ""))))
                 except (ValueError, TypeError, LookupError):
                     skipped.append(uid.decode("ascii"))
         return source, rows, skipped
@@ -188,7 +189,7 @@ def update_email_index(config=None, index_path=INDEX_PATH):
     settings.update(load_config() if config is None else config)
     source, metadata, skipped = fetch_metadata(settings)
     rows, added = EmailIndex(index_path).merge(source, metadata)
-    return dict(added=added, total=len(rows), skipped_uids=skipped, emails=rows, table=format_table(rows))
+    return dict(added=added, total=len(rows), skipped_uids=skipped, emails=rows, table=format_table(rows), source=source)
 
 
 def update_email(config=None, index_path=INDEX_PATH):

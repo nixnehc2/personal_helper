@@ -1,4 +1,4 @@
-"""Local timer ingestion only: no Agent, transport or mailbox operations."""
+"""Source checks and transactional ingestion only; no Agent execution."""
 import argparse
 from contextlib import closing, contextmanager
 from datetime import timezone
@@ -10,7 +10,7 @@ import sqlite3
 import time
 
 from .automations import AutomationStore, SCHEMA
-from .automation_triggers import instant, schedule_time
+from .automation_triggers import instant
 
 
 def stamp(value):
@@ -25,7 +25,7 @@ def connect(store):
     return db
 
 
-def check_once(store=None, now=None, tolerance_seconds=None):
+def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=None):
     store = store or AutomationStore()
     now = instant((now or store.clock()).isoformat())
     tolerance = float(tolerance_seconds if tolerance_seconds is not None else
@@ -33,56 +33,37 @@ def check_once(store=None, now=None, tolerance_seconds=None):
     if not math.isfinite(tolerance) or tolerance < 0:
         raise ValueError("容差必须是有限非负秒数")
     result = dict(enqueued=[], skipped=[], failed=[])
+    from .automation_sources import TimerSource, EmailSource
+    sources = {"timer": TimerSource(tolerance), "email": EmailSource(store.settings, email_index_path)}
     with closing(connect(store)) as db:
-        ids = [r[0] for r in db.execute("SELECT id FROM automations WHERE status='active' AND trigger_type='schedule'")]
-    for id in ids:
+        rows = [dict(r) for r in db.execute("SELECT * FROM automations WHERE status='active' ORDER BY id")]
+    for snapshot in rows:
+        id = snapshot["id"]
         try:
+            original = store.decode(snapshot)
+            source = sources.get("timer" if original["trigger_type"] == "schedule" else original["source"])
+            if source is None:
+                continue
+            prepared = source.prepare(original, now)
+            if prepared is None:
+                continue
             with closing(connect(store)) as db, db:
                 db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT * FROM automations WHERE id=?", (id,)).fetchone()
-                if row is None or row["status"] != "active" or row["trigger_type"] != "schedule":
+                if row is None or row["status"] != "active":
+                    continue
+                # Network sync may overlap edits, another checker, or consumption.
+                # Discard stale snapshots instead of applying them to a new baseline.
+                if any(row[k] != snapshot[k] for k in ("trigger_config", "updated_at", "cursor", "next_check_at", "pending_events")):
                     continue
                 rule = store.decode(row)
-                config = rule["trigger_config"]
-                once = config["schedule_type"] == "once"
-                cursor = rule["cursor"]
-                due = instant(rule["next_check_at"]) if rule["next_check_at"] else None
-                if due is None and not (once and cursor):
-                    due = schedule_time(config, now, inclusive=True)
-                events = rule["pending_events"]
-                queued = skipped = None
-                status = rule["status"]
-                if due is not None and due <= now:
-                    # croniter's reverse search near DST can precede its forward
-                    # occurrence. The persisted forward schedule remains authoritative.
-                    latest = due if once else max(due, schedule_time(config, now, previous=True))
-                    late = (now - latest).total_seconds() > tolerance
-                    should_queue = not late or config["missed_policy"] == "latest"
-                    if should_queue:
-                        scheduled = stamp(latest)
-                        event_id = f"schedule:{id}:{scheduled}"
-                        if not any(e["event_id"] == event_id for e in events):
-                            events.append(dict(event_id=event_id, source="timer", event_type="schedule.due",
-                                occurred_at=scheduled, content=rule["content"], data=dict(
-                                    scheduled_at=scheduled, detected_at=stamp(now), timezone=config["timezone"],
-                                    is_catch_up=late), status="pending", reply=None, attempts=0,
-                                retry_at=None, last_error=None))
-                            queued = dict(id=id, event_id=event_id)
-                    if latest > due or not should_queue:
-                        skipped = dict(id=id, from_at=stamp(due), through_at=stamp(latest),
-                                       reason="已错过并跳过" if not should_queue else "仅保留最近一次，其余计划时间跳过")
-                    cursor = stamp(latest)
-                    due = None if once else schedule_time(config, latest)
-                    if once and not should_queue and not events:
-                        status = "completed"
+                queued, skipped = source.check(rule, now, prepared)
                 db.execute("""UPDATE automations SET pending_events=?,cursor=?,next_check_at=?,
                     last_checked_at=?,last_error=NULL,status=? WHERE id=?""",
-                    (json.dumps(events, ensure_ascii=False), cursor, stamp(due) if due else None,
-                     stamp(now), status, id))
-            if queued:
-                result["enqueued"].append(queued)
-            if skipped:
-                result["skipped"].append(skipped)
+                    (json.dumps(rule["pending_events"], ensure_ascii=False), rule["cursor"], rule["next_check_at"],
+                     stamp(now), rule["status"], id))
+            result["enqueued"].extend(queued)
+            result["skipped"].extend(skipped)
         except Exception as error:
             failure = dict(id=id, error=str(error))
             try:
@@ -138,7 +119,7 @@ def loop_lock(store, purpose="checker"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="前台定时检查器；仅入队，不执行任务")
+    parser = argparse.ArgumentParser(description="前台时间/邮件检查器；仅入队，不执行任务")
     parser.add_argument("--interval", type=float, help="检查间隔秒数（默认配置或 10）")
     parser.add_argument("--once", action="store_true", help="只检查一次")
     args = parser.parse_args()

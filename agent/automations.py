@@ -10,7 +10,7 @@ from .automation_triggers import EVENT_VALIDATORS, nonempty, object_fields, sche
 from .llm import load_config
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data/automations.sqlite3"
-NOTICE = "规则已保存；手动启动检查器可将定时事件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。"
+NOTICE = "规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。"
 EDITABLE = ("name", "trigger_config", "content", "mode")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS automations (
@@ -132,6 +132,10 @@ class AutomationStore:
                         next_at = schedule_time(candidate["trigger_config"], now, inclusive=True)
                         db.execute("UPDATE automations SET next_check_at=?,cursor=NULL,last_checked_at=NULL,last_error=NULL WHERE id=?",
                                    (next_at.isoformat(), id))
+                    elif current["source"] == "email" and candidate["trigger_config"] != current["trigger_config"]:
+                        reset = candidate["trigger_config"]["scope"] != current["trigger_config"]["scope"]
+                        db.execute("UPDATE automations SET cursor=?,next_check_at=NULL WHERE id=?",
+                                   (None if reset else current["cursor"], id))
                 elif action in ("pause", "resume", "cancel"):
                     status = current["status"]
                     target = {"pause": "paused", "resume": "active", "cancel": "cancelled"}[action]
@@ -141,6 +145,8 @@ class AutomationStore:
                         if action != "cancel" and status not in ("active", "paused"):
                             raise ValueError(f"{status} 规则不能暂停")
                         db.execute("UPDATE automations SET status=?,updated_at=? WHERE id=?", (target, stamp, id))
+                        if action == "resume" and current["source"] == "email":
+                            db.execute("UPDATE automations SET cursor=NULL,next_check_at=NULL WHERE id=?", (id,))
                     if action == "cancel":
                         events = [e for e in current["pending_events"] if e.get("status") != "pending"]
                         db.execute("UPDATE automations SET pending_events=? WHERE id=?",

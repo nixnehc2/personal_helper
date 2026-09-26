@@ -26,7 +26,7 @@ class Mailbox:
     def logout(self): return "BYE", []
     def uid(self, command, *args):
         if command == "search": return "OK", [b" ".join(self.headers)]
-        assert args[1] == "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)])"
+        assert args[1] == "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE IN-REPLY-TO REFERENCES)])"
         if self.fail and b"2" in args[0].split(b","):
             raise imaplib.IMAP4.abort("private")
         return "OK", [(b"1 (UID " + uid + b" BODY[HEADER.FIELDS] {10}", self.headers[uid])
