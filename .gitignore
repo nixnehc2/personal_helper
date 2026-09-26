@@ -24,3 +24,4 @@ node_modules/
 
 /data/automations.sqlite3*
 /data/automations.checker.lock
+/data/automations.consumer.lock

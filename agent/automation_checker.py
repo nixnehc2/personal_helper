@@ -109,9 +109,9 @@ def pending(store=None, id=None):
 
 
 @contextmanager
-def loop_lock(store):
+def loop_lock(store, purpose="checker"):
     """OS-owned file lock is released even if the process crashes; never unlink it."""
-    path = store.path.resolve().with_suffix(".checker.lock")
+    path = store.path.resolve().with_suffix(f".{purpose}.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as stream:
         if stream.tell() == 0:
@@ -126,7 +126,7 @@ def loop_lock(store):
                 import fcntl
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
-            raise RuntimeError("该数据库已有检查循环在运行") from error
+            raise RuntimeError("该数据库已有检查循环在运行" if purpose == "checker" else "该数据库已有事件消费者在运行") from error
         try:
             yield
         finally:

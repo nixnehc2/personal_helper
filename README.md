@@ -313,4 +313,4 @@ python -m unittest discover -s tests
 
 ## 长期规则（第一阶段）
 
-通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件。暂不调用 Agent、检查邮箱或发送通知。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义及人工验收见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)。
+通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。检查器不消费事件，消费者不自动启动，暂不接入邮件来源、系统通知或开机自启。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，事件消费和验收见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)。
