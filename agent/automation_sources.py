@@ -93,8 +93,6 @@ class EmailSource:
         if key not in self.synced:
             try:
                 result = update_email_index(dict(self.settings, EMAIL_FOLDER=scope["folder"]), self.index_path)
-                if result["skipped_uids"]:
-                    raise ValueError("邮箱同步不完整；邮件检查进度未推进，请重试")
                 self.synced[key] = result
             except Exception as error:
                 self.synced[key] = error

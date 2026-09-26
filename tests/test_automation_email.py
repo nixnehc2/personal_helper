@@ -101,12 +101,14 @@ class EmailAutomationTests(unittest.TestCase):
         self.assertEqual(self.check(10)["enqueued"], [])
         before = self.row()["cursor"]
         self.add(2)
+        self.add(3)
         self.mailbox.malformed = True
         result = self.check(20)
-        self.assertEqual(len(result["failed"]), 2)
-        self.assertEqual(self.row()["cursor"], before)
+        self.assertEqual(len(result["failed"]), 0)
+        self.assertEqual(len(result["enqueued"]), 2)  # UID 3 triggers both rules; UID 2 is skipped.
+        self.assertNotEqual(self.row()["cursor"], before)
         self.mailbox.malformed = False
-        self.assertEqual(len(self.check(30)["enqueued"]), 2)
+        self.assertEqual(len(self.check(30)["enqueued"]), 0)
         self.assertIsNone(self.row()["last_error"])
 
     def test_resume_baseline_and_match_edit_does_not_rescan(self):

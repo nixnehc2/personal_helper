@@ -18,6 +18,9 @@ class Mailbox:
     fail = False
     malformed = False
 
+    def __init__(self):
+        self.calls = []
+
     def login(self, *args): return "OK", []
     def select(self, folder, readonly):
         assert readonly
@@ -25,7 +28,16 @@ class Mailbox:
     def response(self, name): return name, [self.validity]
     def logout(self): return "BYE", []
     def uid(self, command, *args):
-        if command == "search": return "OK", [b" ".join(self.headers)]
+        self.calls.append((command, args))
+        if command == "search":
+            if args[1] == "ALL":
+                return "OK", [b" ".join(self.headers)]
+            minimum = int(args[2].split(":")[0])
+            found = [uid for uid in self.headers if int(uid) >= minimum]
+            # IMAP N:* may return the highest UID when N exceeds the mailbox maximum.
+            if not found and self.headers:
+                found = [max(self.headers, key=int)]
+            return "OK", [b" ".join(found)]
         assert args[1] == "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE IN-REPLY-TO REFERENCES)])"
         if self.fail and b"2" in args[0].split(b","):
             raise imaplib.IMAP4.abort("private")
@@ -67,9 +79,9 @@ class IndexTests(unittest.TestCase):
     def test_disconnect_preserves_exact_file_and_redacts_error(self):
         self.sync()
         before = self.path.read_bytes()
-        self.mailbox.fail = True
-        with self.assertRaisesRegex(ValueError, "IMAP 获取邮件头失败") as error:
-            self.sync()
+        with patch.object(self.mailbox, "uid", side_effect=imaplib.IMAP4.abort("private")):
+            with self.assertRaisesRegex(ValueError, "IMAP 获取 UID 列表失败") as error:
+                self.sync()
         self.assertNotIn("private", str(error.exception))
         self.assertEqual(before, self.path.read_bytes())
 

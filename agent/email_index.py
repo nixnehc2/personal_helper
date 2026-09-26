@@ -1,5 +1,4 @@
 """Local metadata index. No EML download, model call, or Memory writes."""
-import copy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email import policy
@@ -11,6 +10,7 @@ from pathlib import Path
 import re
 import ssl
 import tempfile
+import time
 
 from .llm import load_config
 
@@ -89,27 +89,68 @@ class EmailIndex:
                 self.write(data)
             return row
 
+    @staticmethod
+    def merge_rows(data, source, metadata):
+        """Linear index construction plus constant-time identity lookups."""
+        scoped = [r for r in data["emails"] if all(r[k] == source[k] for k in ("host", "account", "folder"))]
+        by_uid, by_message = {}, {}
+        for row in scoped:
+            by_uid.setdefault((row["uidvalidity"], row["imap_uid"]), row)
+            if row["message_id"]:
+                by_message.setdefault(row["message_id"], row)
+        added = 0
+        for item in metadata:
+            existing = by_uid.get((source["uidvalidity"], item["imap_uid"]))
+            if existing is None and item["message_id"]:
+                existing = by_message.get(item["message_id"])
+            if existing is None:
+                existing = dict(source, **item, id=data["next_id"], imported=False, imported_at=None)
+                data["emails"].append(existing)
+                data["next_id"] += 1
+                added += 1
+            else:
+                old_uid = (existing["uidvalidity"], existing["imap_uid"])
+                old_message = existing["message_id"]
+                if by_uid.get(old_uid) is existing:
+                    del by_uid[old_uid]
+                if by_message.get(old_message) is existing:
+                    del by_message[old_message]
+                existing.update(source)
+                existing.update(item)
+            by_uid[(existing["uidvalidity"], existing["imap_uid"])] = existing
+            if existing["message_id"]:
+                by_message.setdefault(existing["message_id"], existing)
+        return added
+
     def merge(self, source, metadata):
         with self.locked():
-            data = copy.deepcopy(self.read())
-            added = 0
-            for item in metadata:
-                scoped = [r for r in data["emails"] if all(r[k] == source[k] for k in ("host", "account", "folder"))]
-                existing = next((r for r in scoped if r["uidvalidity"] == source["uidvalidity"] and r["imap_uid"] == item["imap_uid"]), None)
-                if existing is None and item["message_id"]:
-                    existing = next((r for r in scoped if r["message_id"] == item["message_id"]), None)
-                if existing is not None:
-                    existing.update(source)
-                    existing.update(item)
-                else:
-                    data["emails"].append(dict(source, **item, id=data["next_id"], imported=False, imported_at=None))
-                    data["next_id"] += 1
-                    added += 1
+            data = self.read()
+            added = self.merge_rows(data, source, metadata)
             self.write(data)
             return data["emails"], added
 
 
-def fetch_metadata(settings):
+def scope_key(settings):
+    return json.dumps([settings.get("EMAIL_IMAP_HOST", "imap.qq.com").lower(),
+                       settings.get("EMAIL_ACCOUNT", "").lower(), settings.get("EMAIL_FOLDER", "INBOX")])
+
+
+def trusted_progress(value):
+    if not isinstance(value, dict):
+        return None
+    if (not isinstance(value.get("uidvalidity"), str) or not value["uidvalidity"].isdigit()
+            or type(value.get("max_uid")) is not int or not 0 <= value["max_uid"] <= 4294967295):
+        return None
+    try:
+        completed = datetime.fromisoformat(value["completed_at"])
+        if completed.tzinfo is None:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value
+
+
+def fetch_metadata(settings, progress=None):
     account = settings.get("EMAIL_ACCOUNT", "")
     password = settings.get("EMAIL_AUTH_CODE", "")
     if not account or not password:
@@ -122,7 +163,9 @@ def fetch_metadata(settings):
         port = int(settings.get("EMAIL_IMAP_PORT", "993"))
         connection = imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context(), timeout=30)
         stage = "登录（请检查邮箱授权码和 IMAP 服务是否开启）"
-        connection.login(account, password)
+        status, _ = connection.login(account, password)
+        if status != "OK":
+            raise ValueError("login failed")
         stage = "选择文件夹"
         status, _ = connection.select(folder, readonly=True)
         if status != "OK":
@@ -131,34 +174,61 @@ def fetch_metadata(settings):
         if not validity or not validity[0] or not validity[0].isdigit():
             raise ValueError("missing UIDVALIDITY")
         source = dict(host=host.lower(), account=account.lower(), folder=folder, uidvalidity=validity[0].decode("ascii"))
+        progress = trusted_progress(progress)
+        incremental = progress is not None and progress["uidvalidity"] == source["uidvalidity"]
+        previous = progress["max_uid"] if incremental else 0
         stage = "获取 UID 列表"
-        status, values = connection.uid("search", None, "ALL")
-        if status != "OK" or not values or values[0] is None:
+        criteria = ("UID", f"{min(previous + 1, 4294967295)}:*") if incremental else ("ALL",)
+        status, values = connection.uid("search", None, *criteria)
+        if status != "OK" or not values or not isinstance(values[0], bytes):
             raise ValueError("search failed")
-        rows, skipped = [], []
-        uids = values[0].split()
+        queried = values[0].split()
+        if any(not uid.isdigit() or not 1 <= int(uid) <= 4294967295 for uid in queried):
+            raise ValueError("invalid UID search response")
+        # Some IMAP servers return the current highest UID for an empty N:* range.
+        uids = [str(uid).encode("ascii") for uid in sorted({int(uid) for uid in queried if int(uid) > previous})]
+        rows, failures = [], []
+        fetched = 0
+
+        def fail(uid, kind):
+            failures.append(dict(source, imap_uid=uid.decode("ascii"),
+                                 failed_at=datetime.now(timezone.utc).isoformat(), error_type=kind))
+
         for start in range(0, len(uids), 100):
             batch = uids[start:start + 100]
-            stage = "获取邮件头"
-            status, parts = connection.uid("fetch", b",".join(batch), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE IN-REPLY-TO REFERENCES)])")
-            if status != "OK":
-                skipped.extend(uid.decode("ascii") for uid in batch)
+            try:
+                status, parts = connection.uid("fetch", b",".join(batch), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE IN-REPLY-TO REFERENCES)])")
+                if status != "OK":
+                    raise ValueError("fetch status failed")
+            except (OSError, imaplib.IMAP4.error, ValueError):
+                for uid in batch:
+                    fail(uid, "fetch_failed")
                 continue
             headers = {}
             for part in parts or []:
-                if isinstance(part, tuple) and isinstance(part[0], bytes):
+                if isinstance(part, tuple) and len(part) >= 2 and isinstance(part[0], bytes):
                     match = re.search(rb"\bUID\s+(\d+)\b", part[0])
-                    if match:
+                    if match and match[1] in batch and isinstance(part[1], bytes):
                         headers[match[1]] = part[1]
+            fetched += len(headers)
             for uid in batch:
+                if uid not in headers:
+                    fail(uid, "missing_header")
+                    continue
                 try:
                     message = BytesHeaderParser(policy=policy.default).parsebytes(headers[uid])
+                    if message.defects:
+                        raise ValueError("malformed header")
                     rows.append(dict(imap_uid=uid.decode("ascii"), message_id=str(message.get("Message-ID", "")).strip(),
                                      subject=str(message.get("Subject", "")), **{"from": str(message.get("From", ""))}, date=str(message.get("Date", "")),
                                      in_reply_to=str(message.get("In-Reply-To", "")), references=str(message.get("References", ""))))
                 except (ValueError, TypeError, LookupError):
-                    skipped.append(uid.decode("ascii"))
-        return source, rows, skipped
+                    fail(uid, "parse_error")
+        return dict(source=source, metadata=rows, failures=failures,
+                    progress=dict(uidvalidity=source["uidvalidity"], max_uid=max([previous] + [int(uid) for uid in uids]),
+                                  completed_at=datetime.now(timezone.utc).isoformat()),
+                    mode="incremental" if incremental else "full", queried_uid_count=len(queried),
+                    eligible_uid_count=len(uids), fetched_header_count=fetched, success_count=len(rows))
     except (OSError, imaplib.IMAP4.error, ValueError):
         # Server errors may echo authentication data. Never include them in user/model output.
         raise ValueError(f"IMAP {stage}失败；原索引未修改") from None
@@ -185,11 +255,32 @@ def update_email_index(config=None, index_path=INDEX_PATH):
     Only this layer fetches metadata and persists index state. Entry points may
     format or limit the returned rows, but never assign IDs or import status.
     """
+    started = time.perf_counter()
     settings = dict(os.environ)
     settings.update(load_config() if config is None else config)
-    source, metadata, skipped = fetch_metadata(settings)
-    rows, added = EmailIndex(index_path).merge(source, metadata)
-    return dict(added=added, total=len(rows), skipped_uids=skipped, emails=rows, table=format_table(rows), source=source)
+    index = EmailIndex(index_path)
+    # Serialize snapshot -> network -> atomic commit so concurrent entrypoints
+    # cannot regress the mailbox watermark or overwrite imported flags.
+    with index.locked():
+        data = index.read()
+        progress_by_scope = data.setdefault("sync_progress", {})
+        failures = data.setdefault("sync_failures", [])
+        if not isinstance(progress_by_scope, dict) or not isinstance(failures, list):
+            raise ValueError("邮件同步记录格式损坏；原索引未修改")
+        key = scope_key(settings)
+        fetched = fetch_metadata(settings, progress_by_scope.get(key))
+        added = index.merge_rows(data, fetched["source"], fetched["metadata"])
+        failures.extend(fetched["failures"])
+        progress_by_scope[key] = fetched["progress"]
+        index.write(data)
+    rows = data["emails"]
+    result = {k: fetched[k] for k in ("source", "mode", "queried_uid_count", "eligible_uid_count", "fetched_header_count", "success_count")}
+    result.update(added=added, total=len(rows), skipped_uids=[f["imap_uid"] for f in fetched["failures"]],
+                  skipped_count=len(fetched["failures"]), failure_records_location=str(index.path.resolve()) + "#sync_failures",
+                  emails=rows, table=format_table(rows), elapsed_seconds=round(time.perf_counter() - started, 3))
+    result["sync_summary"] = (f"共 {result['total']} 封，新增 {result['added']} 封；{result['mode']} 同步：查询 UID {result['queried_uid_count']}，实际获取邮件头 {result['fetched_header_count']}，"
+                              f"成功 {result['success_count']}，跳过 {result['skipped_count']}；失败记录：{result['failure_records_location']}")
+    return result
 
 
 def update_email(config=None, index_path=INDEX_PATH):
@@ -202,7 +293,7 @@ def main():
         print("同步邮箱……")
         result = update_email_index()
         print(result["table"])
-        print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
+        print(result["sync_summary"])
         return 0
     except (OSError, ValueError) as error:
         print(str(error))

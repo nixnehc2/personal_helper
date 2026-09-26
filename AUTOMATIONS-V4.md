@@ -44,7 +44,7 @@ python -m agent.automation_checker --interval 10
 - 同一检查轮中，相同账号/文件夹 scope 共用一次同步（不同文件夹分别同步），包括失败结果。遵守各规则 `check_interval_seconds`，未到期不发起同步。
 - `cursor` 是 JSON，保存源标识及最后检查的本地索引 ID；`next_check_at` 是下一次允许轮询的时间，`last_checked_at` 是成功检查时间。与索引的 imported/imported_at 完全独立。
 - 不匹配的邮件同样推进 cursor；同一邮件可触发不同规则。事件 ID 为 `email:<规则编号>:<本地邮件ID>`，消费后 cursor 仍保留，重复同步及重启不重新入队。
-- 同一批事件追加与 cursor 更新在同一 SQLite 事务中保存；同步或邮件头获取不完整时均不推进进度，错误记入 last_error。邮件失败不阻断时间来源。
+- 同一批事件追加与 cursor 更新在同一 SQLite 事务中保存；整体同步失败不推进进度，错误记入 last_error；部分邮件头失败记录并永久跳过，成功邮件继续匹配和推进规则进度。邮件失败不阻断时间来源。详见 [UID 增量同步](EMAIL-INCREMENTAL.md)。
 - 暂停保留事件；恢复后重新同步建立基线，跳过暂停期间邮件。修改匹配条件保留 cursor，不回扫已检查邮件；修改邮箱 scope 重新建立基线。
 - IMAP UIDVALIDITY 更换时保守地为新一代邮箱建立基线，避免无 Message-ID 的历史邮件被重新编号后误触发；该次同步中的邮件都跳过。现有索引会尽量通过 Message-ID 保留本地 ID。
 - `mode=once` 只为首封匹配邮件入队，等待其消费成功后 completed；`continuous` 为所有新匹配邮件入队。

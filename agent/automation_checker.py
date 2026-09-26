@@ -72,6 +72,8 @@ def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=No
             except Exception as record_error:
                 failure["record_error"] = str(record_error)
             result["failed"].append(failure)
+    result["mailbox_syncs"] = [sync["sync_summary"] for sync in sources["email"].synced.values()
+                               if isinstance(sync, dict) and "sync_summary" in sync]
     result["display"] = (f"入队 {len(result['enqueued'])}；跳过 {len(result['skipped'])} 条规则；失败 {len(result['failed'])}\n"
                          + json.dumps({k: v for k, v in result.items() if k != "display"}, ensure_ascii=False))
     return result

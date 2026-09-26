@@ -467,7 +467,7 @@ def main():
                     print("[error] " + safe_display(result["error"]))
                 elif name == "update_email":
                     print(safe_display(result["table"]))
-                    print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
+                    print(safe_display(result["sync_summary"]))
                 elif name in ("edit_email", "send_email", "automation"):
                     print(safe_display(result["display"]))
                 else:

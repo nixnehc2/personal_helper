@@ -103,23 +103,26 @@ class EmailEntrypointTests(unittest.TestCase):
         code, output = self.cli()
         self.assertEqual(code, 0)
         self.assertIn("新增 0 封", output)
-        self.assertEqual(email_index.EmailIndex(self.path).read(), data)
+        saved = email_index.EmailIndex(self.path).read()
+        self.assertEqual(saved["emails"], data["emails"])
+        self.assertEqual(saved["next_id"], data["next_id"])
+        self.assertEqual(saved["sync_progress"][email_index.scope_key(CONFIG)]["max_uid"], 2)
         self.assertEqual(self.core.call_count, 3)
 
     def test_failure_through_each_entrypoint_keeps_index(self):
         self.chat()
         before = self.path.read_bytes()
-        self.mailbox.fail = True
+        self.mailbox.uid = Mock(side_effect=OSError("private"))
         result, is_error = self.agent()
         self.assertTrue(is_error)
-        self.assertIn("IMAP 获取邮件头失败", result["error"])
+        self.assertIn("IMAP 获取 UID 列表失败", result["error"])
         self.assertNotIn("private", result["error"])
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertIn("IMAP 获取邮件头失败", self.chat())
+        self.assertIn("IMAP 获取 UID 列表失败", self.chat())
         self.assertEqual(self.path.read_bytes(), before)
         code, output = self.cli()
         self.assertEqual(code, 1)
-        self.assertIn("IMAP 获取邮件头失败", output)
+        self.assertIn("IMAP 获取 UID 列表失败", output)
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_tool_cannot_accept_agent_supplied_index_state(self):
