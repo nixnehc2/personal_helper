@@ -21,3 +21,5 @@ __pycache__/
 node_modules/
 
 /generated_files/
+
+/data/automations.sqlite3*

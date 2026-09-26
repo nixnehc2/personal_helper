@@ -310,3 +310,7 @@ python -m unittest discover -s tests
 测试正文在 `tests/fixtures/file_writer.md`，覆盖中文标题、中文段落、混排、粗体、列表、代码和简单表格。
 专项测试真实生成四种文件，检查 DOCX 的基本结构和 PDF 中文文字，覆盖目录边界、并发不覆盖、
 权限不足、缺少后端、转换失败/超时/缺字、无效输出，以及工具结果返回当前对话。
+
+## 长期规则（第一阶段）
+
+通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。当前仅保存，不自动检查或提醒。配置、时间语义及人工验收见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)。

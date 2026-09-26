@@ -13,6 +13,12 @@ from .llm import Client, load_config
 from .tools import FileTools, TOOLS
 
 BOOTSTRAP = """You are a personal knowledge-base agent.
+长期提醒和监控请求必须使用 automation 工具保存，不写入 Memory，不生成或执行 SQL。
+content 必须包含脱离原对话也能理解的完整执行指令，不依赖“这封邮件”等指代。
+不能猜测导师邮箱、目标邮件 Message-ID 或缺失的必要时间；先查已有信息，仍不明确则询问。
+根据需求生成结构化时间配置或五字段 Cron；不能准确表达则明确说明，不替换为近似周期。
+成功后展示规则编号、触发条件、执行指令、持续方式、状态；定时规则同时展示工具返回的时区和时间预览。
+必须明确告知：规则已保存，自动检查和提醒尚未接入。不得宣称将自动检查或发送提醒。
 Before answering, asking a clarification question, or making a tool call, determine whether its
 correctness depends on user-specific information. This applies to final answer content and to every
 intermediate value or tool argument, including identity, preferences, contact details, project
@@ -240,7 +246,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     tool_specs = getattr(files, "tool_specs", TOOLS)
     if files.processing_eml:
         tool_specs = [spec for spec in tool_specs
-                      if spec["name"] not in ("email", "import_email", "edit_email", "send_email", "read_file", "create_file")]
+                      if spec["name"] not in ("email", "import_email", "edit_email", "send_email", "read_file", "create_file", "automation")]
     messages.append(dict(role="user", content=user))
     try:
         for _ in range(max_steps):
@@ -275,7 +281,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                         result = files.execute(call.get("name"), call.get("input"))
                 else:
                     result = files.execute(call.get("name"), call.get("input"))
-                if call.get("name") in ("edit_email", "send_email") and "error" not in result:
+                if call.get("name") in ("edit_email", "send_email", "automation") and "error" not in result:
                     emit(safe_display(result["display"]))
                 if call.get("name") == "show_memory_changes" and "error" not in result:
                     for change in result["changes"]:
@@ -331,6 +337,27 @@ def parse_email_command(user):
 
 def parse_tool_command(user):
     """Translate explicit commands to tool calls; no mailbox or Memory logic."""
+    if user.split(maxsplit=1)[:1] == ["/automation"]:
+        parts = user.split(maxsplit=2)
+        if len(parts) < 2:
+            raise ValueError("用法：/automation list|get <id>|create <JSON>|update <id> <JSON>|pause/resume/cancel <id>")
+        action = parts[1]
+        tail = parts[2] if len(parts) == 3 else ""
+        if action == "list" and not tail:
+            return "automation", {"action": action}
+        if action == "create":
+            return "automation", dict(action=action, rule=json.loads(tail))
+        if action in ("get", "update", "pause", "resume", "cancel"):
+            args = tail.split(maxsplit=1)
+            if not args or not args[0].isascii() or not args[0].isdecimal() or int(args[0]) <= 0:
+                raise ValueError("规则编号必须是正整数")
+            result = dict(action=action, id=int(args[0]))
+            if action == "update" and len(args) == 2:
+                result["rule"] = json.loads(args[1])
+            elif action == "update" or len(args) != 1:
+                raise ValueError("update 需要 JSON；其他操作只接受编号")
+            return "automation", result
+        raise ValueError("无效 automation 命令或多余参数")
     if user in ("update_email", "update_email()", "/update_email"):
         return "update_email", {}
     parts = user.split()
@@ -384,6 +411,7 @@ def main():
         return 1
     print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/import_email <id> 导入单封邮件，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求。/send_email <草稿 ID> 展示并确认后通过 SMTP 发送。")
+    print("/automation list 查看规则；get/create/update/pause/resume/cancel 管理规则（仅保存，不执行）。")
     print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
     while True:
@@ -422,7 +450,7 @@ def main():
                 elif name == "update_email":
                     print(safe_display(result["table"]))
                     print(f"共 {result['total']} 封，新增 {result['added']} 封，跳过 {len(result['skipped_uids'])} 封")
-                elif name in ("edit_email", "send_email"):
+                elif name in ("edit_email", "send_email", "automation"):
                     print(safe_display(result["display"]))
                 else:
                     print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))

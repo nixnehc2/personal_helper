@@ -1,2 +1,4 @@
 mcp==1.30.0
 markitdown[pdf,docx]==0.1.8
+croniter==6.0.0
+tzdata==2026.2
