@@ -41,7 +41,7 @@ class RunHistoryTests(unittest.TestCase):
     def test_history_is_private_from_memory_tools(self):
         files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
         RunHistory(self.path).append("session_start")
-        result = files.execute("read_file", dict(path=HISTORY_NAME))
+        result = files.execute("read_memory", dict(path=HISTORY_NAME))
         self.assertIn("error", result)
         self.assertNotIn(HISTORY_NAME, files.policy.changes)
 
@@ -100,7 +100,7 @@ class ToolTests(unittest.TestCase):
 
     def test_paths(self):
         for path in ("../outside.md", "a/../../outside", "C:\\outside", "/etc/passwd", "\\\\server\\share", "note.md:stream", "NUL", "folder. /note.md"):
-            for name, extra in (("read_file", {}), ("list_directory", {}), ("search_files", {"query": "x"}),
+            for name, extra in (("read_memory", {}), ("list_directory", {}), ("search_files", {"query": "x"}),
                                 ("create_file", {"content": "x"}), ("replace_text", {"old_text": "a", "new_text": "x"})):
                 self.assertIn("error", self.files.execute(name, dict(path=path, **extra)), (name, path))
 
@@ -116,7 +116,7 @@ class ToolTests(unittest.TestCase):
     def test_hardlink_is_rejected(self):
         link = self.root / "linked.md"
         link.hardlink_to(self.root / "projects/note.md")
-        self.assertIn("hard links", self.files.execute("read_file", {"path": "linked.md"})["error"])
+        self.assertIn("hard links", self.files.execute("read_memory", {"path": "linked.md"})["error"])
 
     def test_changed_during_confirmation(self):
         (self.root / "self").mkdir()
@@ -134,8 +134,8 @@ class ToolTests(unittest.TestCase):
     def test_search_and_pagination(self):
         result = self.files.search_files("ALPHA")
         self.assertEqual(result["matches"][0]["line"], 1)
-        self.assertEqual(self.files.read_file("projects/note.md", 2, 1)["content"], "beta\n")
-        self.assertTrue(self.files.read_file("projects/note.md", 1, 1)["truncated"])
+        self.assertEqual(self.files.read_memory("projects/note.md", 2, 1)["content"], "beta\n")
+        self.assertTrue(self.files.read_memory("projects/note.md", 1, 1)["truncated"])
 
     def test_crlf_preserved(self):
         (self.root / "projects/note.md").write_bytes(b"alpha\r\nbeta\r\n")
@@ -145,13 +145,13 @@ class ToolTests(unittest.TestCase):
 
     def test_malformed_call(self):
         self.assertIn("error", self.files.execute("execute_shell", {}))
-        self.assertIn("error", self.files.execute("read_file", {"path": 12}))
-        self.assertIn("error", self.files.execute("read_file", {"path": "projects/note.md", "extra": True}))
+        self.assertIn("error", self.files.execute("read_memory", {"path": 12}))
+        self.assertIn("error", self.files.execute("read_memory", {"path": "projects/note.md", "extra": True}))
 
     def test_loop_returns_tool_results_and_preserves_context(self):
         (self.root / "AGENT.md").write_text("Read indexes first", encoding="utf-8")
         responses = [
-            dict(content=[dict(type="tool_use", id="r1", name="read_file", input={"path": "projects/note.md"})], stop_reason="tool_use"),
+            dict(content=[dict(type="tool_use", id="r1", name="read_memory", input={"path": "projects/note.md"})], stop_reason="tool_use"),
             dict(content=[dict(type="text", text="alpha [note.md]")], stop_reason="end_turn"),
         ]
         class FakeClient:

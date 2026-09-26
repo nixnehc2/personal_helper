@@ -17,3 +17,5 @@ __pycache__/
 .memory-transaction.json
 .memory-transaction.lock
 .memory-tmp-*
+
+node_modules/

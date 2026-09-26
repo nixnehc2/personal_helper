@@ -9,7 +9,7 @@ from .email_index import EmailIndex
 from .tools import TOOLS
 
 DRAFTS_PATH = Path(__file__).resolve().parent.parent / "data/email/drafts"
-READ_TOOLS = {"read_file", "read_memory", "search_files", "search_memory", "list_directory"}
+READ_TOOLS = {"read_memory", "search_files", "search_memory", "list_directory"}
 WRITING_PROMPT = """当前任务是起草或修改邮件，只编辑本地草稿，绝不发送。
 根据用户当前明确要求写作；当前要求优先于历史习惯。修改时保留未要求改变的内容。
 先按 AGENT.md 和索引读取与收件人、主题有关的 Personal Memory；已有相关历史邮件可参考称呼、语气和上下文。

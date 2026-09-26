@@ -59,7 +59,7 @@ class DraftTests(unittest.TestCase):
         self.files.create_file("projects/context.md", "项目 A 候选信息")
         before = copy.deepcopy(self.files.show_memory_changes())
         client = Mock(complete=Mock(side_effect=[
-            call("read_file", {"path": "projects/context.md"}),
+            call("read_memory", {"path": "projects/context.md"}),
             call("create_file", {"path": "bad.txt", "content": "bad"}),
             call("send_email", {"draft_id": 1}), answer()]))
         result = self.edit(client)

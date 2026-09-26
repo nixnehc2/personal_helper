@@ -1,0 +1,7 @@
+{
+  "name": "personal-ai-helper-file-reader",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2026.8.31"
+  }
+}

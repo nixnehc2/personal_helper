@@ -73,7 +73,7 @@ class DraftTools(FileTools):
         self.intent, self.draft = None, None
         self.style_read = False
         self.indexes_read = set()
-        self.tool_specs = [s for s in TOOLS if s["name"] in ("read_file", "list_directory", "search_files")]
+        self.tool_specs = [s for s in TOOLS if s["name"] in ("read_memory", "list_directory", "search_files")]
         self.tool_specs += [
             schema("set_draft_intent", "Before retrieval, summarize sender, request, facts, deadlines and reply goal.",
                    {"intent": "string"}, ["intent"]),
@@ -97,10 +97,10 @@ class DraftTools(FileTools):
                     raise ValueError("invalid draft")
                 self.draft = dict(intent=self.intent, **arguments, one_shot=next(iter(self.one_shot_paths), None))
                 return dict(status="draft_only_not_sent")
-            if name not in {"read_file", "list_directory", "search_files"}:
+            if name not in {"read_memory", "list_directory", "search_files"}:
                 raise ValueError("drafting is read-only")
             result = super().execute(name, arguments)
-            if name == "read_file" and "error" not in result:
+            if name == "read_memory" and "error" not in result:
                 path = self.policy.canonical(arguments["path"])
                 if path == "self/email_style.md":
                     self.style_read = True

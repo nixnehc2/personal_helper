@@ -110,8 +110,8 @@ class EmailMemoryTests(unittest.TestCase):
     def test_draft_intent_style_retrieval_and_optional_example(self):
         client = ScriptClient([
             [("set_draft_intent", {"intent": "Reply about the project deadline"})],
-            [("read_file", {"path": "self/email_style.md"}), ("read_file", {"path": "_INDEX.md"}),
-             ("read_file", {"path": "knowledge/email_oneshots/_INDEX.md"})],
+            [("read_memory", {"path": "self/email_style.md"}), ("read_memory", {"path": "_INDEX.md"}),
+             ("read_memory", {"path": "knowledge/email_oneshots/_INDEX.md"})],
             [("submit_draft", {"to": "alice@example.test", "subject": "Re: Project", "body": "Thanks for the update."})],
         ])
         result = draft_email("Acknowledge receipt", client, self.root, incoming_path=self.mail, emit=lambda _: None)
@@ -124,12 +124,12 @@ class EmailMemoryTests(unittest.TestCase):
             self.files.create_file(f"knowledge/email_oneshots/{name}.md", "sample")
         self.files.commit_memory_changes()
         files = DraftTools(self.root)
-        self.assertIn("error", files.execute("read_file", {"path": "_INDEX.md"}))
+        self.assertIn("error", files.execute("read_memory", {"path": "_INDEX.md"}))
         files.execute("set_draft_intent", {"intent": "reply"})
         self.assertIn("error", files.execute("create_file", {"path": "projects/x.md", "content": "no"}))
         self.assertIn("error", files.execute("find_related_pending", {"query": "anything"}))
-        self.assertNotIn("error", files.execute("read_file", {"path": "knowledge/email_oneshots/a.md"}))
-        self.assertIn("error", files.execute("read_file", {"path": "knowledge/email_oneshots/b.md"}))
+        self.assertNotIn("error", files.execute("read_memory", {"path": "knowledge/email_oneshots/a.md"}))
+        self.assertIn("error", files.execute("read_memory", {"path": "knowledge/email_oneshots/b.md"}))
 
     def test_parser_multipart_html_attachment_and_encoding(self):
         message = EmailMessage(policy=policy.SMTP)
@@ -149,8 +149,8 @@ class EmailMemoryTests(unittest.TestCase):
     def test_batch_coalesces_multiple_changes_to_same_file(self):
         self.files.create_file("self/focus.md", "alpha")
         self.files.replace_text("self/focus.md", "alpha", "beta")
-        self.assertEqual(self.files.read_file("self/focus.md")["content"], "beta")
-        self.assertTrue(self.files.read_file("self/focus.md")["temporary"])
+        self.assertEqual(self.files.read_memory("self/focus.md")["content"], "beta")
+        self.assertTrue(self.files.read_memory("self/focus.md")["temporary"])
         self.files.commit_memory_changes()
         self.assertEqual(len(self.reviews), 1)
         self.assertEqual(len(self.reviews[0]), 1)
@@ -244,7 +244,7 @@ class EmailMemoryTests(unittest.TestCase):
         client = ScriptClient([[create("self/preference.md", "Possible short endings; evidence: user edit")]])
         learn_from_edit({"body": "Long ending"}, "Thanks", client, self.files, emit=lambda _: None)
         self.assertFalse((self.root / "self/preference.md").exists())
-        self.assertIn("Possible", self.files.read_file("self/preference.md")["content"])
+        self.assertIn("Possible", self.files.read_memory("self/preference.md")["content"])
         self.assertEqual(self.reviews, [])
 
     def test_all_local_fixtures_parse(self):

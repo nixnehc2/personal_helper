@@ -1,6 +1,6 @@
 # Personal Agent V1
 
-一个 Python 3.12+ 命令行 Agent：根据 Markdown 知识库回答问题，通过统一 Temporary Transaction 维护 Memory：所有修改先暂存，用户明确 yes 后才能提交；尚不成熟的长期候选保存在 `pending/`。只使用 Python 标准库，无第三方依赖。
+一个 Python 3.12+ 命令行 Agent：根据 Markdown 知识库回答问题，通过统一 Temporary Transaction 维护 Memory：所有修改先暂存，用户明确 yes 后才能提交；尚不成熟的长期候选保存在 `pending/`。核心聊天与 Memory 使用 Python 标准库；统一文件读取另需 MCP、MarkItDown 和 Node.js 依赖（见文末）。
 
 ## 启动
 
@@ -99,7 +99,7 @@ python -m agent.email_index
 每次工具调用会显示简短参数：读取的文件与行范围、搜索关键词与范围、列出的目录，以及写入目标文件。长参数会截短，换行等字符会转义，避免日志刷屏；完整修改仍在确认 diff 中展示。例如：
 
 ```text
-[tool] read_file | 文件="self/_INDEX.md" | 起始行=1 | 最多行数=200
+[tool] read_memory | 文件="self/_INDEX.md" | 起始行=1 | 最多行数=200
 [result] success
 [tool] search_files | 关键词="沟通偏好" | 范围="self"
 [result] success
@@ -128,12 +128,12 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 | 工具 | 行为 |
 | --- | --- |
 | `list_directory(path)` | 列出直接子项，最多 200 项，标明是否截断 |
-| `read_file(path, start_line=1, max_lines=200)` | UTF-8 文本，行号从 1 开始；最多 500 行/20000 字符，标明截断 |
+| `read_memory(path, start_line=1, max_lines=200)` | UTF-8 文本，行号从 1 开始；最多 500 行/20000 字符，标明截断 |
 | `search_files(query, path=".")` | 对 `.md`、`.txt` 做不区分大小写的字面全文搜索；返回路径、行号、片段；最多 50 条匹配、2000 个遍历项，并报告跳过项和截断 |
 | `create_file(path, content)` | 在 Temporary 新建；拒绝覆盖当前工作副本中的已有文件 |
 | `replace_text(path, old_text, new_text)` | 在 Temporary 局部替换；非空文本必须恰好匹配一次（包含重叠检查） |
 
-`read_memory/search_memory/write_memory/edit_memory` 分别是上述 `read_file/search_files/create_file/replace_text` 的兼容别名，参数相同。读、搜索、目录列表直接使用完整 Temporary 工作副本，删除项从当前视图隐藏；返回的 `temporary` 字段区分未确认内容。`pending/` 是普通 Memory 分类，同样参与读取、搜索和列表；`.memory-*` 运行时目录和状态保持不可见。
+`search_memory/write_memory/edit_memory` 分别是上述 `search_files/create_file/replace_text` 的兼容别名，参数相同。`read_memory` 保留原 Memory 分页读取语义；`read_file` 现在专用于明确绝对路径的外部文件读取。读、搜索、目录列表直接使用完整 Temporary 工作副本，删除项从当前视图隐藏；返回的 `temporary` 字段区分未确认内容。`pending/` 是普通 Memory 分类，同样参与读取、搜索和列表；`.memory-*` 运行时目录和状态保持不可见。
 
 | 事务工具 | 行为 |
 | --- | --- |
@@ -210,3 +210,57 @@ python -m unittest discover -s tests -v
 ## 单封邮件导入测试
 
 `test_single_email.ps1` 默认使用 `tmp/email-test/memory`。运行 `./test_single_email.ps1 -List` 查看编号，运行 `./test_single_email.ps1 -Number 1 -Reprocess -ContinueChat` 导入一封后继续反馈；不带参数可交互选择。`-Email` 支持指定文件路径，`-ParseOnly` 仅本地解析，`-DryRun` 仅检查参数。提交仍需 Runtime 的用户 yes；详细说明见 `tmp/email-test/README.md`。
+
+
+## 统一文件读取 V1
+
+在现有聊天中直接提供绝对路径，例如：
+
+```text
+读取 C:\Users\123\Desktop\note.md，告诉我里面写了什么
+读取 C:\Users\123\Desktop\paper.pdf，总结三点主要内容
+读取 C:\Users\123\Desktop\report.docx，找到关于 XXX 的部分
+比较 C:\Users\123\Desktop\a.pdf 和 C:\Users\123\Desktop\b.docx 的内容
+```
+
+安装依赖（Python 3.12+、Node.js 22+）：
+
+```powershell
+python -m pip install -r requirements.txt
+npm ci
+```
+
+Agent 仅看到 `read_file(path)`，成功结果为 `path`、`file_type`、`content`。
+TXT/MD 通过 [Official Filesystem MCP](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem)
+的 `read_text_file` 读取；PDF/DOCX 使用 [Microsoft MarkItDown](https://github.com/microsoft/markitdown)
+自带对应格式转换器的默认行为。禁用插件、OCR、视觉模型、云转换以及普通文本/ZIP 回退，避免损坏文档被误报为成功。
+MCP 通过官方 Python SDK stdio 启动已锁版本的本地 Node 包，30 秒超时，每次调用后关闭连接和子进程。
+不把 MCP 工具目录注册给模型，不增加外部目录浏览、搜索、写入或文件生成能力。
+原有 Memory 工具和事务继续工作，Memory 读取统一用 `read_memory`，邮件内部读取也已迁移。
+
+默认允许读取当前用户主目录 `Path.home()` 下的文件。可用环境变量或 `config.local.json`
+的 `FILE_READER_ALLOWED_ROOTS` 设置更窄或其他范围（配置文件优先，值为 JSON 数组的字符串）：
+
+```powershell
+$env:FILE_READER_ALLOWED_ROOTS = '["C:\\Users\\123\\Desktop", "D:\\Documents"]'
+```
+
+只接受明确的本地绝对路径，拒绝 URL、UNC、`..`、目录、链接、junction、硬链接和越界路径。
+四种格式共享同一访问边界；当前 Memory 根目录和 `.memory-*` 私有文件不可经外部读取绕过。
+修改配置后重启会话生效。文件正文视为不可信数据，不自动导入 Memory。
+
+V1 限制：输入最大 20 MiB，正文最大 80000 字符；超限返回错误，不静默截断。
+空文件、无可提取文字、损坏或加密文档、缺失依赖、无权限、MCP 失败均作为工具错误回到原 `run_turn`，不终止对话。
+错误含 `error` 和 `code`，调试异常通过 Python logging 写入 stderr，不记录完整正文。
+扫描 PDF 不做 OCR；默认文档转换不保证复杂排版还原。
+
+验证：
+
+```powershell
+python -m unittest discover -s tests -p test_file_reader.py
+python -m unittest discover -s tests
+```
+
+`tests/fixtures/file_reader/example.{txt,md,pdf,docx}` 均包含 `Project: File Reader V1`
+和 `Key number: 314159`。专项测试实际启动 MCP 并运行 MarkItDown，覆盖四种格式、错误边界、
+模拟系统 PermissionError、Memory 隔离，以及同一 `run_turn` 连续读取 PDF/DOCX 和错误恢复。

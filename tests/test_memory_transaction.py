@@ -77,7 +77,7 @@ class TransactionTests(unittest.TestCase):
     def test_explicit_discard_restores_formal_to_temporary(self):
         self.files.create_file("projects/b.md", "temporary")
         self.files.discard_memory_changes()
-        self.assertIn("error", self.files.execute("read_file", {"path": "projects/b.md"}))
+        self.assertIn("error", self.files.execute("read_memory", {"path": "projects/b.md"}))
         self.assertFalse(self.state()["active"])
         self.assert_synchronized()
 
@@ -157,7 +157,7 @@ class TransactionTests(unittest.TestCase):
         self.files.create_file("projects/b.md", "temporary")
         self.assertTrue((self.files.workspace_root / "projects/b.md").exists())
         reopened = self.open_files()
-        self.assertIn("error", reopened.execute("read_file", {"path": "projects/b.md"}))
+        self.assertIn("error", reopened.execute("read_memory", {"path": "projects/b.md"}))
         self.assertFalse((reopened.workspace_root / "projects/b.md").exists())
         self.assertFalse(self.state()["active"])
         self.assert_synchronized()
