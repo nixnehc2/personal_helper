@@ -178,12 +178,138 @@ class ToolTests(unittest.TestCase):
 
         run_turn(FakeClient(), self.files, [], "What are my current projects?", emit=lambda _: None)
 
-        self.assertIn("Before answering any request whose answer could depend on the user's identity", captured["system"])
+        self.assertIn("Before answering, asking a clarification question, or making a tool call", captured["system"])
+        self.assertIn("Clarification is a fallback after retrieval fails", captured["system"])
         self.assertIn("Knowledge-base root index (_INDEX.md):\nroot navigation", captured["system"])
         self.assertIn("Root index entries are navigation, not sufficient evidence", captured["system"])
         descriptions = {spec["name"]: spec["description"] for spec in captured["tools"]}
         self.assertIn("Required before citing a Memory fact", descriptions["read_memory"])
-        self.assertIn("Use when index navigation does not locate relevant Memory", descriptions["search_files"])
+        self.assertIn("Use when already loaded indexes do not locate relevant Memory", descriptions["search_files"])
+
+
+class MemoryRetrievalPolicyTests(unittest.TestCase):
+    @staticmethod
+    def tool_names(messages):
+        return [block["name"] for message in messages
+                if isinstance(message.get("content"), list)
+                for block in message["content"]
+                if isinstance(block, dict) and block.get("type") == "tool_use"]
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
+        (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
+
+    def test_memory_value_is_used_for_generated_filename(self):
+        (self.root / "_INDEX.md").write_text("self: self/_INDEX.md", encoding="utf-8")
+        (self.root / "self").mkdir()
+        (self.root / "self/_INDEX.md").write_text("profile: self/profile.md", encoding="utf-8")
+        (self.root / "self/profile.md").write_text("姓名：陈新\n学号：241502026\n", encoding="utf-8")
+        self.files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
+        captured = {}
+        responses = [
+            dict(content=[dict(type="tool_use", id="read", name="read_memory",
+                               input={"path": "self/profile.md"})], stop_reason="tool_use"),
+            dict(content=[dict(type="tool_use", id="create", name="create_file",
+                               input={"filename": "陈新-241502026.pdf", "content": "作业内容"})],
+                 stop_reason="tool_use"),
+            dict(content=[dict(type="text", text="已生成")], stop_reason="end_turn"),
+        ]
+
+        class FakeClient:
+            def complete(inner, system, messages, tools):
+                captured["system"] = system
+                if len(messages) == 3:
+                    result = json.loads(messages[-1]["content"][0]["content"])
+                    self.assertIn("陈新", result["content"])
+                    self.assertIn("241502026", result["content"])
+                return responses.pop(0)
+
+        with patch.object(self.files, "create_file", return_value=dict(success=True, path="generated_files/陈新-241502026.pdf")) as create_file:
+            messages = []
+            run_turn(FakeClient(), self.files, messages, "请按照姓名-学号.pdf生成文件", emit=lambda _: None)
+
+        create_file.assert_called_once_with(filename="陈新-241502026.pdf", content="作业内容")
+        self.assertIn("Knowledge-base self index (self/_INDEX.md):\nprofile: self/profile.md", captured["system"])
+        self.assertEqual(self.tool_names(messages), ["read_memory", "create_file"])
+
+    def test_conversation_value_is_used_without_memory_search(self):
+        (self.root / "_INDEX.md").write_text("root navigation", encoding="utf-8")
+        responses = [
+            dict(content=[dict(type="tool_use", id="create", name="create_file",
+                               input={"filename": "陈新-241502026.pdf", "content": "作业内容"})],
+                 stop_reason="tool_use"),
+            dict(content=[dict(type="text", text="已生成")], stop_reason="end_turn"),
+        ]
+
+        class FakeClient:
+            def complete(inner, system, messages, tools):
+                return responses.pop(0)
+
+        with patch.object(self.files, "create_file", return_value=dict(success=True, path="generated_files/陈新-241502026.pdf")):
+            messages = []
+            run_turn(FakeClient(), self.files, messages, "我的姓名是陈新，学号是241502026；请生成姓名-学号.pdf", emit=lambda _: None)
+
+        self.assertEqual(self.tool_names(messages), ["create_file"])
+
+    def test_missing_memory_value_allows_user_question_after_search(self):
+        (self.root / "_INDEX.md").write_text("root navigation", encoding="utf-8")
+        responses = [
+            dict(content=[dict(type="tool_use", id="search", name="search_files",
+                               input={"query": "学号"})], stop_reason="tool_use"),
+            dict(content=[dict(type="text", text="未找到学号，请提供学号")], stop_reason="end_turn"),
+        ]
+
+        class FakeClient:
+            def complete(inner, system, messages, tools):
+                if len(messages) >= 3:
+                    result = json.loads(messages[-1]["content"][0]["content"])
+                    self.assertEqual(result["matches"], [])
+                return responses.pop(0)
+
+        messages = []
+        run_turn(FakeClient(), self.files, messages, "请按照姓名-学号.pdf生成文件", emit=lambda _: None)
+        self.assertEqual(self.tool_names(messages), ["search_files"])
+        self.assertIn("请提供学号", messages[-1]["content"][0]["text"])
+
+    def test_conflicting_memory_values_require_user_confirmation(self):
+        (self.root / "_INDEX.md").write_text("self: self/_INDEX.md", encoding="utf-8")
+        (self.root / "self").mkdir()
+        (self.root / "self/_INDEX.md").write_text("profile A: self/profile-a.md\nprofile B: self/profile-b.md", encoding="utf-8")
+        (self.root / "self/profile-a.md").write_text("学号：241502026\n", encoding="utf-8")
+        (self.root / "self/profile-b.md").write_text("学号：241502027\n", encoding="utf-8")
+        self.files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
+        responses = [
+            dict(content=[
+                dict(type="tool_use", id="a", name="read_memory", input={"path": "self/profile-a.md"}),
+                dict(type="tool_use", id="b", name="read_memory", input={"path": "self/profile-b.md"}),
+            ], stop_reason="tool_use"),
+            dict(content=[dict(type="text", text="Memory 中存在两个学号，请确认应使用哪一个")], stop_reason="end_turn"),
+        ]
+
+        class FakeClient:
+            def complete(inner, system, messages, tools):
+                if len(messages) >= 3:
+                    values = [json.loads(block["content"])["content"] for block in messages[-1]["content"]]
+                    self.assertIn("241502026", "".join(values))
+                    self.assertIn("241502027", "".join(values))
+                return responses.pop(0)
+
+        messages = []
+        run_turn(FakeClient(), self.files, messages, "请按照姓名-学号.pdf生成文件", emit=lambda _: None)
+        self.assertEqual(self.tool_names(messages), ["read_memory", "read_memory"])
+        self.assertIn("请确认", messages[-1]["content"][0]["text"])
+
+class ToolLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.files = FileTools(self.root, lambda changes: {i: c.after for i, c in enumerate(changes)}, lambda action, changes: "yes")
+        (self.root / "projects").mkdir(exist_ok=True)
+        (self.root / "projects/note.md").write_text("alpha\nbeta\n", encoding="utf-8", newline="")
 
     def test_useful_candidate_memory_is_staged_and_committed(self):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
@@ -228,8 +354,13 @@ class ToolTests(unittest.TestCase):
             def complete(inner, system, messages, tools):
                 self.assertIn("do not mechanically store ordinary knowledge", system)
                 return dict(content=[dict(type="text", text="这是普通知识回答")], stop_reason="end_turn")
-        result = run_turn(AnswerOnlyClient(), self.files, [], "What is a hash table?", emit=lambda _: None)
+        messages = []
+        result = run_turn(AnswerOnlyClient(), self.files, messages, "What is a hash table?", emit=lambda _: None)
         self.assertEqual(result["changes"], [])
+        self.assertFalse(any(block.get("type") == "tool_use"
+                             for message in messages
+                             if isinstance(message.get("content"), list)
+                             for block in message["content"]))
 
     def test_user_no_retains_candidates_for_revision(self):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")

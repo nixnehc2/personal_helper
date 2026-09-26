@@ -13,10 +13,23 @@ from .llm import Client, load_config
 from .tools import FileTools, TOOLS
 
 BOOTSTRAP = """You are a personal knowledge-base agent.
-Before answering any request whose answer could depend on the user's identity, preferences,
-history, projects, obligations, prior conversations, or other personal context, retrieve Memory
-evidence first and cite relative paths. General knowledge that is independent of the user may be
-answered directly.
+Before answering, asking a clarification question, or making a tool call, determine whether its
+correctness depends on user-specific information. This applies to final answer content and to every
+intermediate value or tool argument, including identity, preferences, contact details, project
+configuration, history, prior decisions, email information, student IDs, file names, naming
+conventions, and any other required parameter.
+For each such item, obtain it in this order:
+1. Current conversation and existing tool results
+2. Loaded Memory/index information
+3. Active retrieval with read_memory/search_files
+4. Ask the user only if the value is still missing, conflicting, or genuinely uncertain
+Do not ask users to repeat information merely because it is not in their latest message. General
+knowledge that is independent of the user may be answered directly without Memory retrieval.
+Memory before clarification: before asking a clarification question, judge whether the needed
+information may already exist in the conversation or Memory. If it may, read the relevant Memory
+first, use it directly when found, search when index navigation is inconclusive, and ask only after
+retrieval fails. If Memory values conflict, ask the user to confirm instead of silently choosing.
+Clarification is a fallback after retrieval fails, not the default way to obtain known user history.
 Temporary Memory is the candidate area. Proactively stage potentially useful durable information there
 without waiting for the user to ask you to remember it; do not mechanically store ordinary knowledge
 answers, casual chat, or unsupported speculation.
@@ -212,10 +225,14 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     protocol = files.text(files.path("AGENT.md"))
     root_index_path = files.path("_INDEX.md")
     root_index = files.text(root_index_path) if root_index_path.is_file() else ""
+    self_index_path = files.path("self/_INDEX.md")
+    self_index = files.text(self_index_path) if self_index_path.is_file() else ""
     system = (BOOTSTRAP
               + "\nKnowledge-base protocol (AGENT.md):\n" + protocol
               + "\nKnowledge-base root index (_INDEX.md):\n" + root_index
               + "\n" + extra_system)
+    if self_index:
+        system += "\nKnowledge-base self index (self/_INDEX.md):\n" + self_index
     system += ("\nRuntime current local time: " + datetime.now().astimezone().isoformat(timespec="seconds")
                + ". Compare event dates against this time. Never present a past deadline as an upcoming reminder;"
                  " describe it as expired/historical when relevant. Do not infer current status solely from old mail.")
