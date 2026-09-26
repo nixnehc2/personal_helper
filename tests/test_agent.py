@@ -166,6 +166,25 @@ class ToolTests(unittest.TestCase):
         run_turn(FakeClient(), self.files, messages, "What is in my note?", emit=lambda _: None)
         self.assertEqual(messages[-1]["role"], "assistant")
 
+    def test_system_prompt_includes_root_index_and_retrieval_rules(self):
+        (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
+        (self.root / "_INDEX.md").write_text("root navigation", encoding="utf-8")
+        captured = {}
+        class FakeClient:
+            def complete(inner, system, messages, tools):
+                captured["system"] = system
+                captured["tools"] = tools
+                return dict(content=[dict(type="text", text="ok")], stop_reason="end_turn")
+
+        run_turn(FakeClient(), self.files, [], "What are my current projects?", emit=lambda _: None)
+
+        self.assertIn("Before answering any request whose answer could depend on the user's identity", captured["system"])
+        self.assertIn("Knowledge-base root index (_INDEX.md):\nroot navigation", captured["system"])
+        self.assertIn("Root index entries are navigation, not sufficient evidence", captured["system"])
+        descriptions = {spec["name"]: spec["description"] for spec in captured["tools"]}
+        self.assertIn("Required before citing a Memory fact", descriptions["read_memory"])
+        self.assertIn("Use when index navigation does not locate relevant Memory", descriptions["search_files"])
+
     def test_useful_candidate_memory_is_staged_and_committed(self):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
         responses = [

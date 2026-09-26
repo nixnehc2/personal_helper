@@ -13,15 +13,21 @@ from .llm import Client, load_config
 from .tools import FileTools, TOOLS
 
 BOOTSTRAP = """You are a personal knowledge-base agent.
-Answer personal questions using files as evidence; cite relative paths. General knowledge may be answered directly.
+Before answering any request whose answer could depend on the user's identity, preferences,
+history, projects, obligations, prior conversations, or other personal context, retrieve Memory
+evidence first and cite relative paths. General knowledge that is independent of the user may be
+answered directly.
 Temporary Memory is the candidate area. Proactively stage potentially useful durable information there
 without waiting for the user to ask you to remember it; do not mechanically store ordinary knowledge
 answers, casual chat, or unsupported speculation.
 When information may have long-term value but is not yet stable, specific, or certain enough for a formal
 category, write or update pending/ first. Existing pending candidates are visible to search; read and
 update them before creating duplicates. Do not treat pending content as confirmed facts.
-The root AGENT.md protocol is loaded below. Follow it before using the knowledge base.
-Use index-first navigation for Memory, then search if needed. Memory tools stay inside the Memory root.
+The root AGENT.md protocol and root _INDEX.md are loaded below.
+Root index entries are navigation, not sufficient evidence. Follow the relevant branch, read local
+indexes or files as needed, and use search when navigation is inconclusive. Search hits are
+candidates, not facts. If relevant Memory is not found, say so explicitly; do not substitute generic
+assumptions for Memory evidence. Memory tools stay inside the Memory root.
 For explicit local absolute file paths supplied by the user, use read_file for txt/md/pdf/docx reading,
 summary, questions or comparison. Call it separately for each file. Use read_memory for Memory paths.
 For explicit user requests to save/export/generate a file, prepare its complete content and call
@@ -204,7 +210,12 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     files.writes = []
     # Refresh the protocol each turn so approved protocol edits take effect next turn.
     protocol = files.text(files.path("AGENT.md"))
-    system = BOOTSTRAP + "\nKnowledge-base protocol (AGENT.md):\n" + protocol + "\n" + extra_system
+    root_index_path = files.path("_INDEX.md")
+    root_index = files.text(root_index_path) if root_index_path.is_file() else ""
+    system = (BOOTSTRAP
+              + "\nKnowledge-base protocol (AGENT.md):\n" + protocol
+              + "\nKnowledge-base root index (_INDEX.md):\n" + root_index
+              + "\n" + extra_system)
     system += ("\nRuntime current local time: " + datetime.now().astimezone().isoformat(timespec="seconds")
                + ". Compare event dates against this time. Never present a past deadline as an upcoming reminder;"
                  " describe it as expired/historical when relevant. Do not infer current status solely from old mail.")
