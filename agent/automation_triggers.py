@@ -42,6 +42,30 @@ def instant(value):
         raise ValueError("时间必须是包含时区偏移的 ISO 8601 时间") from None
 
 
+def schedule_time(config, reference, *, previous=False, inclusive=False):
+    """Shared UTC occurrence calculation for preview and runtime (no iteration over gaps)."""
+    kind = config["schedule_type"]
+    if kind == "once":
+        return instant(config["at"])
+    if kind == "interval":
+        start = instant(config["start_at"])
+        step = timedelta(seconds=config["interval_seconds"])
+        count = (reference - start) // step
+        if previous:
+            return start + count * step if count >= 0 else None
+        if count < 0:
+            return start
+        if not inclusive or start + count * step < reference:
+            count += 1
+        return start + count * step
+    base = reference.astimezone(zone(config["timezone"]))
+    # get_prev is exclusive; one microsecond includes an exact minute boundary.
+    if previous:
+        base = (reference + timedelta(microseconds=1)).astimezone(zone(config["timezone"]))
+    iterator = croniter(config["expression"], base, day_or=True, max_years_between_matches=8)
+    return (iterator.get_prev(datetime) if previous else iterator.get_next(datetime)).astimezone(timezone.utc)
+
+
 def schedule(config, default_timezone, now):
     kind = config.get("schedule_type") if isinstance(config, dict) else None
     required = {"once": ("at",), "interval": ("start_at", "interval_seconds"),
@@ -67,8 +91,6 @@ def schedule(config, default_timezone, now):
         step = timedelta(seconds=config["interval_seconds"])
         if step <= timedelta(0):
             raise ValueError("interval_seconds 小于时间精度（微秒）")
-        count = max(0, -((start - now) // step))
-        times = [start + (count + i) * step for i in range(3)]
         config["start_at"] = start.isoformat()
     else:
         expression = nonempty(config["expression"], "expression")
@@ -77,9 +99,12 @@ def schedule(config, default_timezone, now):
             raise ValueError("Cron 仅支持五字段数字 Unix 格式：分 时 日 月 星期；支持 * , - /")
         if not croniter.is_valid(expression):
             raise ValueError("非法 Cron 表达式")
-        iterator = croniter(expression, now.astimezone(tz), day_or=True, max_years_between_matches=8)
+    # Both preview and checker use exactly the same occurrence engine.
+    if kind != "once":
         try:
-            times = [iterator.get_next(datetime) for _ in range(3)]
+            first = schedule_time(config, now, inclusive=kind == "interval")
+            second = schedule_time(config, first)
+            times = [first, second, schedule_time(config, second)]
         except ValueError:
             raise ValueError("Cron 在未来八年内没有有效触发时间") from None
     return config, "once" if kind == "once" else "continuous", [t.astimezone(tz).isoformat() for t in times]

@@ -139,7 +139,7 @@ class AutomationsTests(unittest.TestCase):
                 patch("builtins.input", side_effect=commands), redirect_stdout(output):
             self.assertEqual(main(), 0)
         self.assertIn("#1", output.getvalue())
-        self.assertIn("自动检查和提醒尚未接入", output.getvalue())
+        self.assertIn("Agent 执行和通知尚未接入", output.getvalue())
         self.assertNotIn("本轮中止", output.getvalue())
 
     def test_agent_and_chat_commands_share_store(self):

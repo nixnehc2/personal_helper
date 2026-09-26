@@ -19,7 +19,7 @@ content 必须包含脱离原对话也能理解的完整执行指令，不依赖
 不能猜测导师邮箱、目标邮件 Message-ID 或缺失的必要时间；先查已有信息，仍不明确则询问。
 根据需求生成结构化时间配置或五字段 Cron；不能准确表达则明确说明，不替换为近似周期。
 成功后展示规则编号、触发条件、执行指令、持续方式、状态；定时规则同时展示工具返回的时区和时间预览。
-必须明确告知：规则已保存，自动检查和提醒尚未接入。不得宣称将自动检查或发送提醒。
+必须明确告知：规则已保存；手动启动检查器可将定时事件入队，Agent 执行和通知尚未接入。不得宣称将自动检查或发送提醒。
 Before answering, asking a clarification question, or making a tool call, determine whether its
 correctness depends on user-specific information. This applies to final answer content and to every
 intermediate value or tool argument, including identity, preferences, contact details, project
@@ -344,6 +344,12 @@ def parse_tool_command(user):
             raise ValueError("用法：/automation list|get <id>|create <JSON>|update <id> <JSON>|pause/resume/cancel <id>")
         action = parts[1]
         tail = parts[2] if len(parts) == 3 else ""
+        if action == "check" and not tail:
+            return "automation_diagnostic", {"action": "check"}
+        if action == "pending":
+            if tail and (not tail.isascii() or not tail.isdecimal() or int(tail) <= 0):
+                raise ValueError("用法：/automation pending [正整数规则编号]")
+            return "automation_diagnostic", dict(action="pending", id=int(tail) if tail else None)
         if action == "list" and not tail:
             return "automation", {"action": action}
         if action == "create":
@@ -412,7 +418,7 @@ def main():
         return 1
     print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/import_email <id> 导入单封邮件，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求。/send_email <草稿 ID> 展示并确认后通过 SMTP 发送。")
-    print("/automation list 查看规则；get/create/update/pause/resume/cancel 管理规则（仅保存，不执行）。")
+    print("/automation list 查看规则；get/create/update/pause/resume/cancel 管理规则；check 检查一次；pending [规则编号] 查看待处理事件（不执行任务）。")
     print(f"[history] 排错历史将追加到 {history.path}")
     messages = []
     while True:
@@ -438,7 +444,12 @@ def main():
         transcript_start = len(messages)
         try:
             command = parse_tool_command(user)
-            if command is None:
+            if command is not None and command[0] == "automation_diagnostic":
+                from .automation_checker import check_once, pending
+                arguments = command[1]
+                result = check_once() if arguments["action"] == "check" else pending(id=arguments["id"])
+                print(safe_display(result["display"]))
+            elif command is None:
                 result = run_turn(client, files, messages, user)
             else:
                 name, arguments = command
