@@ -53,7 +53,7 @@ class TransactionTests(unittest.TestCase):
 
     def test_modify_accept_makes_formal_equal_temporary(self):
         self.files.replace_text("projects/a.md", "original", "edited")
-        self.files.create_file("projects/new.md", "new")
+        self.files.write_memory("projects/new.md", "new")
         self.files.commit_memory_changes()
         self.assertEqual((self.root / "projects/a.md").read_text(encoding="utf-8"), "edited")
         self.assertEqual((self.root / "projects/new.md").read_text(encoding="utf-8"), "new")
@@ -62,7 +62,7 @@ class TransactionTests(unittest.TestCase):
 
     def test_no_retains_temporary_for_revision_then_yes_commits(self):
         self.answer = "no"
-        self.files.create_file("projects/b.md", "first")
+        self.files.write_memory("projects/b.md", "first")
         self.assertEqual(self.files.commit_memory_changes()["status"], "not_approved")
         self.assertEqual(self.files.read_memory("projects/b.md")["content"], "first")
         self.assertFalse((self.root / "projects/b.md").exists())
@@ -75,14 +75,14 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual([action for action, _ in self.approvals], ["commit", "commit"])
 
     def test_explicit_discard_restores_formal_to_temporary(self):
-        self.files.create_file("projects/b.md", "temporary")
+        self.files.write_memory("projects/b.md", "temporary")
         self.files.discard_memory_changes()
         self.assertIn("error", self.files.execute("read_memory", {"path": "projects/b.md"}))
         self.assertFalse(self.state()["active"])
         self.assert_synchronized()
 
     def test_pending_uses_the_same_transaction(self):
-        self.files.create_file("pending/preference.md", "candidate")
+        self.files.write_memory("pending/preference.md", "candidate")
         self.assertEqual((self.files.workspace_root / "pending/preference.md").read_text(encoding="utf-8"), "candidate")
         self.assertFalse((self.root / "pending/preference.md").exists())
         self.files.commit_memory_changes()
@@ -98,14 +98,14 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(self.files.commit_memory_changes()["status"], "no_changes")
         self.assertEqual(self.approvals, [])
 
-        self.files.create_file("pending/candidate.md", "candidate")
+        self.files.write_memory("pending/candidate.md", "candidate")
         result = self.files.show_memory_changes()
         change = next(item for item in result["changes"] if item["path"] == "pending/candidate.md")
         self.assertIn("+candidate", change["diff"])
         self.assertFalse(change["diff_omitted"])
 
     def test_archive_during_transaction_does_not_commit_or_count_derived_changes(self):
-        self.files.create_file("projects/b.md", "candidate")
+        self.files.write_memory("projects/b.md", "candidate")
         archive = self.files.policy.archive_email(b"raw email")
         self.assertEqual(list(self.files.policy.changes), ["projects/b.md"])
         self.assertFalse((self.root / "projects/b.md").exists())
@@ -114,7 +114,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
 
     def test_archive_survives_discard_and_restart(self):
-        self.files.create_file("projects/b.md", "candidate")
+        self.files.write_memory("projects/b.md", "candidate")
         archive = self.files.policy.archive_email(b"raw email")
         self.files.policy.discard(explicit=True)
         self.files = self.open_files()
@@ -124,7 +124,7 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(self.files.policy.archive_email(b"raw email")["duplicate"])
 
     def test_archive_does_not_hide_external_memory_conflict(self):
-        self.files.create_file("projects/b.md", "candidate")
+        self.files.write_memory("projects/b.md", "candidate")
         (self.root / "projects/a.md").write_text("external change", encoding="utf-8")
         self.files.policy.archive_email(b"raw email")
         with self.assertRaisesRegex(ValueError, "Formal Memory changed"):
@@ -146,7 +146,7 @@ class TransactionTests(unittest.TestCase):
 
     def test_raw_mirror_cannot_be_changed_via_commit(self):
         archive = self.files.policy.archive_email(b"raw email")
-        self.files.create_file("projects/b.md", "candidate")
+        self.files.write_memory("projects/b.md", "candidate")
         (self.files.workspace_root / archive["path"]).write_bytes(b"tampered")
         with self.assertRaisesRegex(ValueError, "raw email archive is immutable"):
             self.files.commit_memory_changes()
@@ -154,7 +154,7 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(self.approvals, [])
 
     def test_new_session_resets_stale_temporary_from_formal(self):
-        self.files.create_file("projects/b.md", "temporary")
+        self.files.write_memory("projects/b.md", "temporary")
         self.assertTrue((self.files.workspace_root / "projects/b.md").exists())
         reopened = self.open_files()
         self.assertIn("error", reopened.execute("read_memory", {"path": "projects/b.md"}))
@@ -163,7 +163,7 @@ class TransactionTests(unittest.TestCase):
         self.assert_synchronized()
 
     def test_runtime_error_does_not_discard_active_transaction(self):
-        self.files.create_file("projects/b.md", "temporary")
+        self.files.write_memory("projects/b.md", "temporary")
         with self.assertRaises(RuntimeError):
             raise RuntimeError("simulated interruption")
         self.assertTrue(self.state()["active"])

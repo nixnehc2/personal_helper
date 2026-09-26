@@ -26,7 +26,7 @@ class ScriptClient:
 
 
 def create(path, content):
-    return "create_file", dict(path=path, content=content)
+    return "write_memory", dict(path=path, content=content)
 
 
 class EmailMemoryTests(unittest.TestCase):
@@ -121,12 +121,12 @@ class EmailMemoryTests(unittest.TestCase):
 
     def test_draft_readonly_and_one_shot_limit(self):
         for name in ("a", "b"):
-            self.files.create_file(f"knowledge/email_oneshots/{name}.md", "sample")
+            self.files.write_memory(f"knowledge/email_oneshots/{name}.md", "sample")
         self.files.commit_memory_changes()
         files = DraftTools(self.root)
         self.assertIn("error", files.execute("read_memory", {"path": "_INDEX.md"}))
         files.execute("set_draft_intent", {"intent": "reply"})
-        self.assertIn("error", files.execute("create_file", {"path": "projects/x.md", "content": "no"}))
+        self.assertIn("error", files.execute("write_memory", {"path": "projects/x.md", "content": "no"}))
         self.assertIn("error", files.execute("find_related_pending", {"query": "anything"}))
         self.assertNotIn("error", files.execute("read_memory", {"path": "knowledge/email_oneshots/a.md"}))
         self.assertIn("error", files.execute("read_memory", {"path": "knowledge/email_oneshots/b.md"}))
@@ -147,7 +147,7 @@ class EmailMemoryTests(unittest.TestCase):
         self.assertEqual(parse_bytes(html.as_bytes()).text_body, "Hello & bye")
 
     def test_batch_coalesces_multiple_changes_to_same_file(self):
-        self.files.create_file("self/focus.md", "alpha")
+        self.files.write_memory("self/focus.md", "alpha")
         self.files.replace_text("self/focus.md", "alpha", "beta")
         self.assertEqual(self.files.read_memory("self/focus.md")["content"], "beta")
         self.assertTrue(self.files.read_memory("self/focus.md")["temporary"])
@@ -157,7 +157,7 @@ class EmailMemoryTests(unittest.TestCase):
         self.assertEqual((self.root / "self/focus.md").read_text(), "beta")
 
     def test_partial_approval_does_not_create_dangling_index(self):
-        self.files.create_file("self/focus.md", "alpha")
+        self.files.write_memory("self/focus.md", "alpha")
         current = self.files.policy.current("self/_INDEX.md")
         self.files.replace_text("self/_INDEX.md", current, current + "\n- [focus](focus.md)\n")
         self.files.policy.confirm_batch = lambda changes: {1: changes[1].after}

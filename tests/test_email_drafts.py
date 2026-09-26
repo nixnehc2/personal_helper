@@ -56,11 +56,11 @@ class DraftTests(unittest.TestCase):
         self.assertIn("简短正文", changed["display"])
 
     def test_read_shared_temporary_memory_and_forbid_writes_or_send(self):
-        self.files.create_file("projects/context.md", "项目 A 候选信息")
+        self.files.write_memory("projects/context.md", "项目 A 候选信息")
         before = copy.deepcopy(self.files.show_memory_changes())
         client = Mock(complete=Mock(side_effect=[
             call("read_memory", {"path": "projects/context.md"}),
-            call("create_file", {"path": "bad.txt", "content": "bad"}),
+            call("write_memory", {"path": "bad.txt", "content": "bad"}),
             call("send_email", {"draft_id": 1}), answer()]))
         result = self.edit(client)
         self.assertNotIn("error", result)

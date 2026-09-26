@@ -80,9 +80,9 @@ class ToolTests(unittest.TestCase):
 
     def test_denial_retains_every_folder(self):
         self.files.policy.confirm_transaction = lambda action, changes: "no"
-        self.files.create_file("self/one.md", "new")
-        self.files.create_file("self/two.md", "new")
-        self.files.create_file("projects/note2.md", "temporary")
+        self.files.write_memory("self/one.md", "new")
+        self.files.write_memory("self/two.md", "new")
+        self.files.write_memory("projects/note2.md", "temporary")
         result = self.files.commit_memory_changes()
         self.assertEqual(result["status"], "not_approved")
         self.assertEqual(len(self.files.policy.changes), 3)
@@ -90,7 +90,7 @@ class ToolTests(unittest.TestCase):
         self.assertFalse((self.root / "projects/note2.md").exists())
 
     def test_create_never_overwrites(self):
-        self.assertIn("exists", self.files.execute("create_file", dict(path="projects/note.md", content="oops"))["error"])
+        self.assertIn("exists", self.files.execute("write_memory", dict(path="projects/note.md", content="oops"))["error"])
 
     def test_missing_multiple_empty_and_overlapping_matches(self):
         (self.root / "projects/note.md").write_text("aaa", encoding="utf-8")
@@ -101,7 +101,7 @@ class ToolTests(unittest.TestCase):
     def test_paths(self):
         for path in ("../outside.md", "a/../../outside", "C:\\outside", "/etc/passwd", "\\\\server\\share", "note.md:stream", "NUL", "folder. /note.md"):
             for name, extra in (("read_memory", {}), ("list_directory", {}), ("search_files", {"query": "x"}),
-                                ("create_file", {"content": "x"}), ("replace_text", {"old_text": "a", "new_text": "x"})):
+                                ("write_memory", {"content": "x"}), ("replace_text", {"old_text": "a", "new_text": "x"})):
                 self.assertIn("error", self.files.execute(name, dict(path=path, **extra)), (name, path))
 
     def test_email_command_preserves_windows_paths_and_flags(self):
@@ -170,13 +170,13 @@ class ToolTests(unittest.TestCase):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
         responses = [
             dict(content=[
-                dict(type="tool_use", id="p1", name="create_file",
+                dict(type="tool_use", id="p1", name="write_memory",
                      input={"path": "self/preference.md", "content": "Candidate long-term preference\n"}),
-                dict(type="tool_use", id="p2", name="create_file",
+                dict(type="tool_use", id="p2", name="write_memory",
                      input={"path": "projects/status.md", "content": "Candidate project status\n"}),
-                dict(type="tool_use", id="p3", name="create_file",
+                dict(type="tool_use", id="p3", name="write_memory",
                      input={"path": "areas/focus.md", "content": "Candidate ongoing focus topic\n"}),
-                dict(type="tool_use", id="p4", name="create_file",
+                dict(type="tool_use", id="p4", name="write_memory",
                      input={"path": "pending/preference.md", "content": "Candidate preference; not yet specific enough\n"}),
             ], stop_reason="tool_use"),
             dict(content=[dict(type="tool_use", id="c1", name="commit_memory_changes", input={})], stop_reason="tool_use"),
@@ -216,7 +216,7 @@ class ToolTests(unittest.TestCase):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
         self.files.policy.confirm_transaction = lambda action, changes: "no"
         responses = [
-            dict(content=[dict(type="tool_use", id="w1", name="create_file",
+            dict(content=[dict(type="tool_use", id="w1", name="write_memory",
                                input={"path": "projects/status.md", "content": "draft status\n"})], stop_reason="tool_use"),
             dict(content=[dict(type="tool_use", id="c1", name="commit_memory_changes", input={})], stop_reason="tool_use"),
             dict(content=[dict(type="text", text="已请求审阅")], stop_reason="end_turn"),
@@ -242,7 +242,7 @@ class ToolTests(unittest.TestCase):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
         class FakeClient:
             def complete(inner, *args):
-                return dict(content=[dict(type="tool_use", id="w1", name="create_file",
+                return dict(content=[dict(type="tool_use", id="w1", name="write_memory",
                                           input=dict(path="bad.md", content="x"))], stop_reason="max_tokens")
         with self.assertRaises(RuntimeError):
             run_turn(FakeClient(), self.files, [], "record x")

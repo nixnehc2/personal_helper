@@ -130,10 +130,10 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 | `list_directory(path)` | 列出直接子项，最多 200 项，标明是否截断 |
 | `read_memory(path, start_line=1, max_lines=200)` | UTF-8 文本，行号从 1 开始；最多 500 行/20000 字符，标明截断 |
 | `search_files(query, path=".")` | 对 `.md`、`.txt` 做不区分大小写的字面全文搜索；返回路径、行号、片段；最多 50 条匹配、2000 个遍历项，并报告跳过项和截断 |
-| `create_file(path, content)` | 在 Temporary 新建；拒绝覆盖当前工作副本中的已有文件 |
+| `write_memory(path, content)` | 在 Temporary 新建；拒绝覆盖当前工作副本中的已有文件 |
 | `replace_text(path, old_text, new_text)` | 在 Temporary 局部替换；非空文本必须恰好匹配一次（包含重叠检查） |
 
-`search_memory/write_memory/edit_memory` 分别是上述 `search_files/create_file/replace_text` 的兼容别名，参数相同。`read_memory` 保留原 Memory 分页读取语义；`read_file` 现在专用于明确绝对路径的外部文件读取。读、搜索、目录列表直接使用完整 Temporary 工作副本，删除项从当前视图隐藏；返回的 `temporary` 字段区分未确认内容。`pending/` 是普通 Memory 分类，同样参与读取、搜索和列表；`.memory-*` 运行时目录和状态保持不可见。
+`search_memory/edit_memory` 分别是上述 `search_files/replace_text` 的兼容别名，参数相同。`write_memory(path, content)` 保留原 Temporary Memory 新建语义；`create_file(filename, content)` 现在用于生成导出文件。`read_memory` 保留原 Memory 分页读取语义；`read_file` 现在专用于明确绝对路径的外部文件读取。读、搜索、目录列表直接使用完整 Temporary 工作副本，删除项从当前视图隐藏；返回的 `temporary` 字段区分未确认内容。`pending/` 是普通 Memory 分类，同样参与读取、搜索和列表；`.memory-*` 运行时目录和状态保持不可见。
 
 | 事务工具 | 行为 |
 | --- | --- |
@@ -264,3 +264,44 @@ python -m unittest discover -s tests
 `tests/fixtures/file_reader/example.{txt,md,pdf,docx}` 均包含 `Project: File Reader V1`
 和 `Key number: 314159`。专项测试实际启动 MCP 并运行 MarkItDown，覆盖四种格式、错误边界、
 模拟系统 PermissionError、Memory 隔离，以及同一 `run_turn` 连续读取 PDF/DOCX 和错误恢复。
+
+
+## 统一文件生成 V1
+
+正常聊天中要求“把刚才的内容保存成 notes.md”、“生成一份 report.docx”或“把报告生成 report.pdf”，
+Agent 会准备完整正文并调用 `create_file(filename, content)`。无需新模式或命令行入口。
+生成结果只保存在代码所在项目根目录的 `generated_files/`，与启动时的工作目录、Memory 根目录无关。
+首次生成自动创建该目录，目录内容已加入 `.gitignore`，不会自动写入 Memory 或提交到 Git。
+
+只接受普通文件名和 `.txt/.md/.docx/.pdf`。绝对路径、子目录、路径穿越、Windows 保留名称一律拒绝。
+用户聊天中指定其他输出路径时，Agent 应说明 V1 固定输出范围并使用普通文件名；工具本身不裁剪路径。
+已存在的同名文件返回错误，不覆盖、不编号、不备份。临时文件清理后，目录只留下成功的输出。
+TXT/MD 按 UTF-8 原样保存；DOCX/PDF 使用 Pandoc 自带 Markdown 转换，保留基础标题、粗体、列表、代码块和表格。
+
+依赖：安装 [Pandoc](https://pandoc.org/installing.html)，确保 `pandoc` 在 PATH 中。
+PDF 固定使用 XeLaTeX（本机 TeX Live 已提供），需要 `xeCJK` 和系统 `Microsoft YaHei`（微软雅黑）字体。
+未安装 Pandoc 仅影响 DOCX/PDF；缺失 XeLaTeX 仅影响 PDF。安装或修改 PATH 后重启 Agent。
+本机验证版本：Pandoc 3.5、TeX Live 2025。没有引入自研排版引擎、模板系统、图片或其他输出格式。
+
+内部流程：`FileWriter` 验证文件名 → 固定目录 → 临时转换 → 检查非空输出 → 原子发布新文件。
+发布使用同卷硬链接的“不存在才创建”语义，并发同名请求也不会覆盖；因此输出盘需支持硬链接（如 Windows NTFS）。
+临时转换目录在 `generated_files/` 内部，正常结束或失败时自动清理，不提供用户子目录管理能力。
+Pandoc 自身解析 Markdown；禁用原始排版代码、TeX 数学、用户 YAML 元数据，拒绝图片，不读取正文引用的附件。
+转换命令不经 shell，XeLaTeX 禁用 shell escape。正文上限 80000 字符，每次 Pandoc 进程超时 90 秒。
+
+成功返回 `success: true`、`filename`、绝对 `path`；失败返回 `success: false`、`error`、`code`。
+目录/权限问题、同名文件、转换失败、缺失依赖、缺字警告均回到当前 `run_turn`，不会中断主对话。
+Pandoc 诊断通过 Python logging 写入 stderr（可能含正文片段），模型只收到简洁错误。
+邮件导入、邮件学习和只读草稿流程禁止调用生成工具；原 Memory 新建能力统一迁移到 `write_memory`。
+
+验证命令（完整集成测试需要上述 Pandoc/PDF 依赖）：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -p test_file_writer.py
+python -m unittest discover -s tests
+```
+
+测试正文在 `tests/fixtures/file_writer.md`，覆盖中文标题、中文段落、混排、粗体、列表、代码和简单表格。
+专项测试真实生成四种文件，检查 DOCX 的基本结构和 PDF 中文文字，覆盖目录边界、并发不覆盖、
+权限不足、缺少后端、转换失败/超时/缺字、无效输出，以及工具结果返回当前对话。

@@ -131,7 +131,7 @@ class EmailEntrypointTests(unittest.TestCase):
             self.assertIn("error", self.files.execute("update_email", arguments))
         self.core.assert_not_called()
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertIn("error", self.files.execute("create_file", {
+        self.assertIn("error", self.files.execute("write_memory", {
             "path": "../data/email/index.json", "content": "{}"}))
         self.assertEqual(self.path.read_bytes(), before)
 
