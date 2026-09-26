@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from pathlib import Path, PureWindowsPath
+import re
 import shutil
 import stat
 import subprocess
@@ -13,6 +14,20 @@ LOG = logging.getLogger(__name__)
 MAX_CHARS = 80_000
 MARKDOWN = ("markdown-raw_tex-raw_html-raw_attribute-yaml_metadata_block-pandoc_title_block"
             "-tex_math_dollars-tex_math_single_backslash-tex_math_double_backslash")
+# XeCJK sub-blocks preserve the original symbol codepoints, including in code
+# blocks, while keeping Chinese in YaHei. This is trusted configuration only;
+# user-supplied TeX and metadata remain disabled.
+PDF_SYMBOLS = re.compile("[\u2600-\u27bf\U0001f300-\U0001f6ff]")
+PDF_SYMBOL_HEADER = r'''\xeCJKDeclareSubCJKBlock{ExportSymbols}{"2600 -> "27BF, "1F300 -> "1F6FF}
+\setCJKmainfont[ExportSymbols={Segoe UI Symbol}]{Microsoft YaHei}
+\setCJKsansfont[ExportSymbols={Segoe UI Symbol}]{Microsoft YaHei}
+\setCJKmonofont[ExportSymbols={Segoe UI Symbol}]{Microsoft YaHei}'''
+
+
+def pdf_symbol_text(content):
+    # The PDF uses monochrome glyphs. Drop only emoji/text presentation selectors
+    # immediately after a supported symbol; never drop the symbol or arbitrary text.
+    return re.sub(f"({PDF_SYMBOLS.pattern})[\ufe0e\ufe0f]", r"\1", content)
 
 
 class FileWriteError(ValueError):
@@ -33,9 +48,13 @@ class PandocBackend:
         if result.stderr:
             LOG.warning("Pandoc diagnostics: %s", result.stderr[-6000:])
         if result.returncode:
-            raise FileWriteError("conversion_failed", "Pandoc 转换失败；PDF 请检查 XeLaTeX、xeCJK 和 Microsoft YaHei 字体，详见日志")
+            raise FileWriteError("conversion_failed", "Pandoc 转换失败；PDF 请检查 XeLaTeX、xeCJK、Microsoft YaHei 及符号字体 Segoe UI Symbol，详见日志")
         if "Missing character:" in result.stderr:
-            raise FileWriteError("missing_glyph", "PDF 字体缺少所需字符，未保存文件；请检查中文字体")
+            codes = list(dict.fromkeys(re.findall(r"\(U\+([0-9A-Fa-f]{4,6})\)", result.stderr)))[:12]
+            details = "、".join(f"{chr(int(code, 16))!r} (U+{code.upper()})"
+                               for code in codes if int(code, 16) <= 0x10FFFF)
+            raise FileWriteError("missing_glyph", "PDF 字体缺少字符：" + (details or "详见日志")
+                                 + "。未保存文件；这不一定是中文字体故障。请针对所列字符调整字体或表示方式后重试 PDF，不要擅自改为其他格式。")
         return result.stdout
 
     def convert(self, content, output):
@@ -47,6 +66,7 @@ class PandocBackend:
             engine = shutil.which("xelatex")
             if not engine:
                 raise FileWriteError("pdf_backend_missing", "PDF backend 缺失：需要 XeLaTeX、xeCJK 和 Microsoft YaHei 中文字体")
+            content = pdf_symbol_text(content)
         # Parse with Pandoc itself. No custom Markdown, DOCX or PDF parser.
         source = output.parent / "source.md"
         source.write_text(content, encoding="utf-8")
@@ -68,6 +88,8 @@ class PandocBackend:
                         "--variable=mainfont:Microsoft YaHei", "--variable=CJKmainfont:Microsoft YaHei",
                         "--variable=monofont:Microsoft YaHei", "--variable=CJKmonofont:Microsoft YaHei",
                         "--variable=pagestyle:empty"]
+            if PDF_SYMBOLS.search(content):
+                command.append("--variable=header-includes:" + PDF_SYMBOL_HEADER)
         self._run(command, output.parent, json.dumps(document, ensure_ascii=False))
         if not output.is_file() or output.stat().st_size == 0:
             raise FileWriteError("empty_output", "转换未生成有效文件")

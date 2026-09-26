@@ -7,7 +7,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
-from agent.file_writer import FileWriter, PandocBackend, FileWriteError
+from agent.file_writer import FileWriter, PandocBackend, FileWriteError, pdf_symbol_text
 from agent.main import run_turn
 from agent.tools import FileTools, TOOLS
 
@@ -61,6 +61,56 @@ class FileWriterTests(unittest.TestCase):
         for name in ("a.xlsx", "a.pptx", "a.html", "a"):
             self.assertEqual(self.writer.create_file(name, BODY)["code"], "unsupported_type")
         self.assertFalse(self.writer.output_dir.exists())
+
+    def test_pdf_chinese_and_symbols_in_heading_table_and_code(self):
+        import pdfplumber
+        body = ("# 中文标题 ✅❌\n\n中文✅正确❌错误 English ⚠️ 📝💻📄\n\n"
+                "**✅ 加粗**\n\n| 状态 | 说明 |\n| --- | --- |\n| ❌ | 失败 |\n\n"
+                "```text\n中文代码✅❌⚠️\n```\n\n`✅行内代码`\n")
+        result = self.writer.create_file("symbols.pdf", body)
+        self.assertTrue(result["success"], result)
+        with pdfplumber.open(result["path"]) as pdf:
+            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            fonts = {c["fontname"] for p in pdf.pages for c in p.chars}
+        for symbol in "✅❌⚠📝💻📄":
+            self.assertIn(symbol, text)
+        self.assertIn("中文代码✅❌⚠", text.replace(" ", ""))
+        self.assertIn("✅行内代码", text.replace(" ", ""))
+        self.assertTrue(any("SegoeUISymbol" in font for font in fonts), fonts)
+        self.assertTrue(any("YaHei" in font for font in fonts), fonts)
+        self.assertEqual(len(list(self.writer.output_dir.iterdir())), 1)
+
+    def test_presentation_selectors_only_normalized_for_pdf_symbols(self):
+        body = "⚠️✅︎中文\uFE0F 字母A\uFE0F"
+        self.assertEqual(pdf_symbol_text(body), "⚠✅中文\uFE0F 字母A\uFE0F")
+        for ext in ("txt", "md", "docx"):
+            result = self.writer.create_file("unchanged." + ext, body)
+            self.assertTrue(result["success"], result)
+            if ext == "docx":
+                from docx import Document
+                actual = "\n".join(p.text for p in Document(result["path"]).paragraphs)
+            else:
+                actual = Path(result["path"]).read_text(encoding="utf-8")
+            self.assertEqual(actual, body)
+
+    def test_unknown_glyph_remains_an_error_with_exact_codepoint(self):
+        result = self.writer.create_file("unsupported.pdf", "中文\u0378")
+        self.assertFalse(result["success"], result)
+        self.assertEqual(result["code"], "missing_glyph")
+        self.assertIn("U+0378", result["error"])
+        self.assertFalse((self.writer.output_dir / "unsupported.pdf").exists())
+        self.assertEqual(list(self.writer.output_dir.iterdir()), [])
+
+    def test_missing_glyph_error_distinguishes_symbols_from_chinese(self):
+        stderr = ("[WARNING] Missing character: There is no ✅ (U+2705) (U+2705) in font\n"
+                  "[WARNING] Missing character: There is no ❌ (U+274C) (U+274C) in font\n")
+        with patch("agent.file_writer.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", stderr)):
+            with self.assertRaises(FileWriteError) as error:
+                PandocBackend()._run(["pandoc"], self.project, "body")
+        self.assertIn("✅", str(error.exception))
+        self.assertIn("❌", str(error.exception))
+        self.assertEqual(str(error.exception).count("U+2705"), 1)
+        self.assertNotIn("请检查中文字体", str(error.exception))
 
     def test_empty_and_large_content(self):
         for body in ("", "  ", None, "x" * 80001):

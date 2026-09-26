@@ -280,6 +280,11 @@ TXT/MD 按 UTF-8 原样保存；DOCX/PDF 使用 Pandoc 自带 Markdown 转换，
 
 依赖：安装 [Pandoc](https://pandoc.org/installing.html)，确保 `pandoc` 在 PATH 中。
 PDF 固定使用 XeLaTeX（本机 TeX Live 已提供），需要 `xeCJK` 和系统 `Microsoft YaHei`（微软雅黑）字体。
+遇到常用符号区 U+2600–U+27BF、U+1F300–U+1F6FF（如 ✅、❌、⚠、📝、💻、📄）时，
+通过 xeCJK 字符区配置使用系统 `Segoe UI Symbol`，保留符号本身并以黑白字形输出，中文继续使用微软雅黑。
+PDF 渲染会忽略这些符号紧随的 U+FE0E/U+FE0F 外观选择符；TXT/MD/DOCX 内容不做此处理。
+这不保证支持全部 emoji、组合序列或罕见字符；仍然缺字时返回具体字符及 Unicode 编码，不笼统归因为中文字体故障。
+生成失败时 Agent 应按具体错误处理，不未经同意改成其他文件格式。
 未安装 Pandoc 仅影响 DOCX/PDF；缺失 XeLaTeX 仅影响 PDF。安装或修改 PATH 后重启 Agent。
 本机验证版本：Pandoc 3.5、TeX Live 2025。没有引入自研排版引擎、模板系统、图片或其他输出格式。
 
