@@ -58,7 +58,7 @@ class AgentRun:
         except Exception:
             pass
 
-    def record_tool_start(self, tool_name, tool_call_id, arguments):
+    def record_tool_start(self, tool_name, tool_call_id, arguments, context_visibility="conversation"):
         try:
             self.steps.append({
                 "type": "tool_call",
@@ -66,6 +66,7 @@ class AgentRun:
                 "tool_name": tool_name,
                 "tool_call_id": tool_call_id,
                 "arguments": arguments,
+                "context_visibility": context_visibility,
             })
         except Exception:
             pass

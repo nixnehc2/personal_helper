@@ -243,6 +243,39 @@ def refresh_memory_evidence(files, messages):
                 block["is_error"] = "error" in refreshed
 
 
+
+_TOOL_VISIBILITY = {spec["name"]: spec.get("context_visibility", "conversation") for spec in TOOLS}
+
+
+def _filter_run_only_results(messages, current_run_start):
+    """Remove run_only tool results from previous runs.
+    current_run_start: index of the first message belonging to the current run.
+    """
+    if current_run_start <= 0:
+        return messages
+    run_only_ids = set()
+    for msg in messages[:current_run_start]:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if block.get("type") == "tool_use" and _TOOL_VISIBILITY.get(block.get("name")) == "run_only":
+                run_only_ids.add(block.get("id"))
+    if not run_only_ids:
+        return messages
+    filtered = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            new_content = [b for b in content
+                           if not (b.get("type") == "tool_result" and b.get("tool_use_id") in run_only_ids)]
+            if new_content:
+                filtered.append({k: v for k, v in msg.items() if k != "content"} | {"content": new_content})
+        else:
+            filtered.append(msg)
+    return filtered
+
+
 def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system="", emit_final=True):
     if user == "/cancel":
         result = files.policy.discard(explicit=True)
@@ -267,6 +300,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     system += ("\nRuntime current local time: " + datetime.now().astimezone().isoformat(timespec="seconds")
                + ". Compare event dates against this time. Never present a past deadline as an upcoming reminder;"
                  " describe it as expired/historical when relevant. Do not infer current status solely from old mail.")
+    system += ("\nHistorical tool results and earlier assistant replies about time, status, or runtime state"              " reflect the situation at the moment they were produced. For current status, prefer the Runtime time and status lines above"              " or re-call the relevant tool; do not treat historical values as present facts.")
     system += f"\nRuntime: current Temporary Transaction contains {len(files.policy.changes)} changed file(s). Use show_memory_changes to inspect it."
     tool_specs = getattr(files, "tool_specs", TOOLS)
     if files.processing_eml:
@@ -277,7 +311,9 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
         for _ in range(max_steps):
             if len(json.dumps(messages, ensure_ascii=False)) > 250000:
                 raise RuntimeError("会话达到 V1 上限，请 /clear 后继续；Temporary 已保留")
-            response = client.complete(system + f"\nRuntime: active_email_draft_id={files.active_email_draft_id}", messages, tool_specs)
+            _current_run_start = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user" and isinstance(messages[i].get("content"), str)), 0)
+            _filtered = _filter_run_only_results(messages, _current_run_start)
+            response = client.complete(system + f"\nRuntime: active_email_draft_id={files.active_email_draft_id}", _filtered, tool_specs)
             blocks = response["content"]
             if response.get("stop_reason") == "max_tokens":
                 raise RuntimeError("模型输出被截断，本次响应中的工具未执行；Temporary 已保留")
@@ -306,7 +342,9 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                     # Include this turn's retrieval, but exclude the unanswered tool_use.
                     with files.email_context(client, messages=copy.deepcopy(messages[:-1]), emit=emit):
                         files._debug_call_id = call.get("id")
-                        result = files.execute(call.get("name"), call.get("input"))
+                        files._debug_call_id = call.get("id")
+                        files._debug_call_id = call.get("id")
+                    result = files.execute(call.get("name"), call.get("input"))
                 else:
                     files._debug_call_id = call.get("id")
                     result = files.execute(call.get("name"), call.get("input"))

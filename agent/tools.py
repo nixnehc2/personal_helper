@@ -10,10 +10,10 @@ from .memory import MemoryChange, MemoryPolicy, TEMPORARY_NAME
 LIMIT = 100_000
 
 
-def schema(name, description, properties, required):
+def schema(name, description, properties, required, context_visibility="conversation"):
     return dict(name=name, description=description, input_schema=dict(
         type="object", properties={k: {"type": v} for k, v in properties.items()},
-        required=required, additionalProperties=False))
+        required=required, additionalProperties=False), context_visibility=context_visibility)
 
 
 TOOLS = [
@@ -36,7 +36,7 @@ TOOLS = [
            {"path": "string", "old_text": "string", "new_text": "string"},
            ["path", "old_text", "new_text"]),
     schema("delete_memory", "Propose a candidate deletion. 只修改 Temporary Memory，不会直接修改 Formal Memory。", {"path": "string"}, ["path"]),
-    schema("show_memory_changes", "Show the current Temporary versus Formal diff.", {}, []),
+    schema("show_memory_changes", "Show the current Temporary versus Formal diff.", {}, [], context_visibility="run_only"),
     schema("commit_memory_changes", "当前修改完成，请进入用户 review。Runtime shows the diff and handles yes/no; never grants approval itself.", {}, []),
     schema("discard_memory_changes", "Request runtime confirmation to discard the entire transaction.", {}, []),
 ]
@@ -336,6 +336,26 @@ class FileTools:
         from .debug_logger import current_run
         run = current_run.get(None)
         call_id = getattr(self, '_debug_call_id', None)
+        _cv = None
+        if run is not None:
+            try:
+                spec = next((x for x in TOOLS if x["name"] == name), None)
+                _cv = spec.get("context_visibility", "conversation") if spec else "conversation"
+                run.record_tool_start(name, call_id, arguments, context_visibility=_cv)
+            except Exception:
+                pass
+        if name in ("email", "import_email", "edit_email", "send_email"):
+            with self.policy.scheduler.turn():
+                result = self._execute(name, arguments)
+        else:
+            result = self._execute(name, arguments)
+        if run is not None:
+            try:
+                err = result.get("error") if isinstance(result, dict) else None
+                run.record_tool_result(call_id, result, error=err)
+            except Exception:
+                pass
+        return result
         if run is not None:
             try:
                 run.record_tool_start(name, call_id, arguments)
