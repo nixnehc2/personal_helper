@@ -240,12 +240,36 @@ def fetch_metadata(settings, progress=None):
                 pass
 
 
+def _rows_to_messages(rows):
+    """Convert raw EmailIndex row dicts to Message objects."""
+    from .messages.email_adapter import email_row_to_message
+    return [email_row_to_message(r) for r in rows]
+
+
 def format_table(rows):
+    """Format rows (raw dicts or Message objects) as a plain-text table."""
+    from .messages import Message
+
     def cell(value):
         return "".join(c if c.isprintable() and c != "|" else " " for c in str(value))
+
     lines = ["ID | Subject | From | Date | Imported"]
-    for row in rows:
-        lines.append(" | ".join(cell(v) for v in (row["id"], row["subject"] or "（无主题）", row["from"], row["date"], "已导入" if row["imported"] else "未导入")))
+    for item in rows:
+        if isinstance(item, Message):
+            row_id = item.id
+            subject = item.content.get("subject", "")
+            from_ = item.content.get("from", "")
+            date = item.content.get("date", "")
+            imported = item.imported
+        else:
+            row_id = item["id"]
+            subject = item["subject"]
+            from_ = item["from"]
+            date = item["date"]
+            imported = item["imported"]
+        display_subject = subject or "（无主题）"
+        imported_label = "已导入" if imported else "未导入"
+        lines.append(" | ".join(cell(v) for v in (row_id, display_subject, from_, date, imported_label)))
     return "\n".join(lines)
 
 
@@ -277,7 +301,7 @@ def update_email_index(config=None, index_path=INDEX_PATH):
     result = {k: fetched[k] for k in ("source", "mode", "queried_uid_count", "eligible_uid_count", "fetched_header_count", "success_count")}
     result.update(added=added, total=len(rows), skipped_uids=[f["imap_uid"] for f in fetched["failures"]],
                   skipped_count=len(fetched["failures"]), failure_records_location=str(index.path.resolve()) + "#sync_failures",
-                  emails=rows, table=format_table(rows), elapsed_seconds=round(time.perf_counter() - started, 3))
+                  emails=rows, table=format_table(_rows_to_messages(rows)), elapsed_seconds=round(time.perf_counter() - started, 3))
     result["sync_summary"] = (f"共 {result['total']} 封，新增 {result['added']} 封；{result['mode']} 同步：查询 UID {result['queried_uid_count']}，实际获取邮件头 {result['fetched_header_count']}，"
                               f"成功 {result['success_count']}，跳过 {result['skipped_count']}；失败记录：{result['failure_records_location']}")
     return result
