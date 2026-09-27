@@ -7,6 +7,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [完整使用说明](docs/README.md) | 启动、配置、Memory、文件读写、Email、Automation、QQ |
+| [统一 Message 第三阶段](docs/MESSAGE-V3.md) | 查询、查看、选择导入与 imported/Memory 完成边界 |
 | [Email V1](docs/EMAIL-V1.md) | 邮件功能与导入流程 |
 | [Email 增量同步](docs/EMAIL-INCREMENTAL.md) | UID 增量同步与失败处理 |
 | [Automation V1](docs/AUTOMATIONS-V1.md) | 规则保存与管理 |
@@ -21,6 +22,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-28 | [03：统一 Message 查询与选择导入](2026-09-28-03-unified-message-import.md) |
 | 2026-09-28 | [02：文档归档与持续日志规则](2026-09-28-02-documentation-organization.md) |
 | 2026-09-28 | [01：QQ 纯文字 Adapter、增量同步与去重](2026-09-28-01-qq-text-sync.md) |
 

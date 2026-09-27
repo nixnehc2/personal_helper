@@ -25,9 +25,10 @@ class Message:
         ISO 8601 string with timezone offset when the timestamp can be
         reliably parsed; ``None`` otherwise.
     imported:
-        Whether this message has completed a Memory import pass.
-        ``True`` does not mean every detail was persisted -- only that
-        the message was processed and can be skipped on future runs.
+        Whether processing completed and any proposed Memory transaction
+        was committed. Pending, failed or abandoned imports remain False.
+        A successful pass without Memory changes can also complete;
+        ``True`` does not mean every detail was persisted.
     content:
         Source-specific payload.  For email this preserves every field
         the existing pipeline depends on (host, account, folder, ...).

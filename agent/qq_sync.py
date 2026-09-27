@@ -33,10 +33,30 @@ class QQStore:
             db.close()
 
     def get(self, id):
+        if type(id) is not int or id <= 0:
+            raise ValueError("Message ID 必须是正整数")
         message = next((m for m in self.list() if m.id == id), None)
         if message is None:
             raise ValueError(f"QQ Message {id} 不存在")
         return message
+
+    def mark_imported(self, expected):
+        db = self.connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT payload FROM messages WHERE id=?", (str(expected.id),)).fetchone()
+            if row is None:
+                raise ValueError("QQ Message 在导入期间已不存在")
+            current = Message(**json.loads(row[0]))
+            if (current.id, current.source, current.time, current.content) != (
+                    expected.id, expected.source, expected.time, expected.content):
+                raise ValueError("QQ Message 在导入期间发生变化；未标记已导入")
+            current.imported = True
+            db.execute("UPDATE messages SET payload=? WHERE id=?",
+                       (json.dumps(asdict(current), ensure_ascii=False), str(current.id)))
+            db.commit()
+        finally:
+            db.close()
 
 
 def update_qq(config=None, db_path=None, client=None, page_size=100):

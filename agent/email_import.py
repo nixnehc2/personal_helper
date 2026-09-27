@@ -1,5 +1,4 @@
 """Resolve one local ID, retrieve its original bytes, and reuse EML processing."""
-from contextlib import contextmanager
 from email import policy
 from email.parser import BytesHeaderParser
 import hashlib
@@ -11,11 +10,12 @@ import re
 import ssl
 import tempfile
 
-from .email_index import EmailIndex, INDEX_PATH
+from .email_index import INDEX_PATH
 from .email_parser import MAX_EMAIL_BYTES
 from .llm import load_config
-from .messages import get_message, Message
-from .messages.email_adapter import email_identity, email_locator
+from .messages.models import Message
+from .messages.email_adapter import email_identity
+from .messages.locking import import_lock
 
 IDENTITY_KEYS = ("id", "host", "account", "folder", "uidvalidity", "imap_uid", "message_id")
 
@@ -23,21 +23,6 @@ IDENTITY_KEYS = ("id", "host", "account", "folder", "uidvalidity", "imap_uid", "
 def identity(row):
     """Legacy helper for code that still operates on raw row dicts."""
     return {key: row[key] for key in IDENTITY_KEYS}
-
-
-@contextmanager
-def import_lock(directory, id):
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{id}.lock"
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        raise ValueError(f"邮件 {id} 正在导入；异常退出后请确认无导入进程再删除 {id}.lock") from None
-    try:
-        os.close(fd)
-        yield
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def atomic_bytes(path, raw):
@@ -153,42 +138,12 @@ def cached_eml(message_or_row, directory, settings):
 
 
 def import_email(id, client, files, *, messages=None, emit=print, index_path=None, config=None):
-    """Single implementation for direct commands and Agent tool calls."""
-    from .email_workflow import process_eml
-
-    # Resolve the effective index path.  ``INDEX_PATH`` at module scope may
-    # have been patched by tests, so we read it first and only override
-    # ``agent.email_index.INDEX_PATH`` when an explicit *index_path* was
-    # given.
+    """Compatibility alias for the common Message import coordinator."""
+    from .messages.importing import import_message
+    from .messages.sources import EmailSource
     effective_path = INDEX_PATH if index_path is None else index_path
-
-    # Temporarily point the email_index module at the same path so that
-    # ``get_message`` (which imports INDEX_PATH from email_index) sees the
-    # correct location.
-    import agent.email_index as _ei
-    original_ei_path = _ei.INDEX_PATH
-    _ei.INDEX_PATH = effective_path
-    try:
-        message = get_message("email", id)
-    finally:
-        _ei.INDEX_PATH = original_ei_path
-
-    # EmailIndex is still needed for directory layout and mark_imported.
-    index = EmailIndex(effective_path)
-    directory = index.path.parent / "raw"
-    with import_lock(directory, id):
-        row = index.get(id)
-        if row["imported"]:
-            return dict(id=id, status="already_imported", note="该邮件已经导入", imported=True,
-                        imported_at=row["imported_at"])
-        settings = dict(os.environ)
-        settings.update(load_config() if config is None else config)
-        path = cached_eml(message, directory, settings)
-        # An archived raw file alone is not proof of completed processing. This
-        # internal retry allows recovery after failure; no force option is exposed.
-        result = process_eml(path, client, files, messages=messages, emit=emit, reprocess=True)
-        if result.get("status") != "processed":
-            raise ValueError("EML 导入流程未正常完成；未标记已导入，Temporary 保留，可重试")
-        updated = index.mark_imported(row)
-        return dict(result, id=id, imported=True, imported_at=updated["imported_at"],
-                    eml_path=str(path), note="邮件处理完成；正式 Memory 仍以用户 review 结果为准")
+    result = import_message(id, client, files, source="email", messages=messages, emit=emit,
+                            backend=EmailSource(effective_path, config))
+    if result.get("status") == "already_imported":
+        result["note"] = "该邮件已经导入"
+    return result

@@ -53,6 +53,9 @@ class MemoryPolicy:
         self.confirm_transaction = confirm_transaction
         self.session = uuid.uuid4().hex
         self.snapshot = None
+        # Session-local completion hooks. They never survive abandoned Temporary state.
+        self.completion_callbacks = {}
+        self.discard_revision = 0
         from .scheduler import OSLock, Scheduler
         self.lease = OSLock(files.root / ".memory-owner.lock")
         self.scheduler = Scheduler(self)
@@ -61,6 +64,19 @@ class MemoryPolicy:
     def close(self):
         if self.lease.stream is not None:
             self.discard(explicit=True)
+        else:
+            self._complete_pending(False)
+
+    def _complete_pending(self, committed):
+        callbacks, self.completion_callbacks = self.completion_callbacks, {}
+        results = []
+        for callback in callbacks.values():
+            try:
+                results.append(callback(committed))
+            except Exception as error:
+                # Formal Memory may already be committed; report the separate state failure.
+                results.append(dict(imported=False, error=str(error)))
+        return results
 
     def _recover(self):
         backup = self.files.root / ".memory-rollback"
@@ -433,7 +449,9 @@ class MemoryPolicy:
                 return dict(status="not_approved", temporary_retained=True)
             shutil.rmtree(self.files.root / TEMPORARY_NAME, ignore_errors=False)
             self._release()
-            return dict(status="discarded" if changes else "no_changes")
+            self.discard_revision += 1
+            return dict(status="discarded" if changes else "no_changes",
+                        message_imports=self._complete_pending(False))
 
     def request_commit(self):
         if not self._active():
@@ -446,7 +464,7 @@ class MemoryPolicy:
             changes = self._changes()
             if not changes:
                 self._release()
-                return dict(status="no_changes")
+                return dict(status="no_changes", message_imports=self._complete_pending(False))
             self._validate(changes)
             if self.confirm_transaction("commit", list(changes.values())) != "yes":
                 return dict(status="not_approved", temporary_retained=True)
@@ -470,7 +488,8 @@ class MemoryPolicy:
             self._validate(changes)
             self._commit_tree()
             self.files.writes.extend(change.path for change in changes.values())
-            return dict(status="committed", paths=[change.path for change in changes.values()])
+            return dict(status="committed", paths=[change.path for change in changes.values()],
+                        message_imports=self._complete_pending(True))
 
     def _preserve_legacy_email_archives(self):
         """Retain old pending raw archives before resetting Temporary at startup.

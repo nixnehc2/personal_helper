@@ -159,14 +159,19 @@ class ImportTests(unittest.TestCase):
         client = ImportClient([[create("projects/imported.md", "candidate")]])
         with patch("agent.email_workflow.process_eml", side_effect=inspect):
             result = self.execute(client)
-        self.assertTrue(result["imported"])
-        self.assertIsNotNone(self.index.get(1523)["imported_at"])
+        self.assertFalse(result["imported"])
+        self.assertEqual(result["status"], "pending_review")
+        self.assertIsNone(self.index.get(1523)["imported_at"])
         self.assertFalse(self.index.get(1524)["imported"])
         self.assertEqual(len(self.mailbox.fetches), 1)
         self.assertEqual(Path(result["eml_path"]).read_bytes(), self.raw)
         self.assertEqual((self.files.workspace_root / result["raw"]["path"]).read_bytes(), self.raw)
         self.assertTrue((self.files.workspace_root / "projects/imported.md").exists())
         self.assertFalse((self.root / "projects/imported.md").exists())
+        self.files.policy.confirm_transaction = lambda *args: "yes"
+        self.files.policy.request_commit()
+        self.assertTrue(self.index.get(1523)["imported"])
+        self.assertIsNotNone(self.index.get(1523)["imported_at"])
 
     def test_duplicate_never_downloads_or_calls_processor(self):
         self.execute()
@@ -207,7 +212,8 @@ class ImportTests(unittest.TestCase):
         result = self.execute(client)
         self.transport.assert_not_called()
         self.assertGreater(client.import_calls, 0)
-        self.assertTrue(result["imported"])
+        self.assertFalse(result["imported"])
+        self.assertEqual(result["status"], "pending_review")
         self.assertTrue((self.files.workspace_root / "projects/retry.md").exists())
 
     def test_memory_tool_failure_does_not_mark_imported(self):
@@ -286,18 +292,48 @@ class ImportTests(unittest.TestCase):
             self.assertIn("配置与该邮件索引不一致", self.execute()["error"])
         self.transport.assert_not_called()
 
-    def test_review_no_retains_temporary_but_processing_completes(self):
+    def test_review_no_retains_temporary_without_marking_imported(self):
         client = ImportClient([[create("projects/review.md", "candidate")], [("commit_memory_changes", {})]])
         result = self.execute(client)
-        self.assertTrue(result["imported"])
+        self.assertFalse(result["imported"])
+        self.assertEqual(result["status"], "pending_review")
         self.assertFalse((self.root / "projects/review.md").exists())
         self.assertTrue((self.files.workspace_root / "projects/review.md").exists())
+        self.files.policy.discard(explicit=True)
+        self.assertFalse(self.index.get(1523)["imported"])
+        self.assertFalse((self.index.path.parent / "raw/1523.lock").exists())
 
     def test_agent_local_email_tool_does_not_escape_memory_root(self):
         outside = self.base / "external.eml"
         outside.write_bytes(self.raw)
         with self.files.email_context(ImportClient(), emit=lambda _: None):
             self.assertIn("error", self.files.execute("email", {"path": str(outside)}))
+
+    def test_unified_query_read_and_import_reuse_email_processor(self):
+        with patch("agent.email_index.INDEX_PATH", self.index.path):
+            listing = self.files.execute("list_messages", dict(source="email", conversation="INBOX", limit=2))
+            self.assertEqual(listing["count"], 2)
+            self.assertEqual({row["source"] for row in listing["messages"]}, {"email"})
+            viewed = self.files.execute("read_message", dict(source="email", id=1523))
+            self.assertIn("项目资料正文", viewed["display"])
+            self.assertFalse(self.index.get(1523)["imported"])
+            self.assertFalse((self.root / "inbox/email").exists())
+            with self.files.message_context(ImportClient(), emit=lambda _: None), \
+                    patch("agent.email_workflow.process_eml", wraps=email_workflow.process_eml) as process:
+                result = self.files.execute("import_message", dict(source="email", id=1523))
+            self.assertTrue(result["imported"])
+            process.assert_called_once()
+        self.assertTrue(self.index.get(1523)["imported"])
+
+    def test_unified_email_pending_and_commit_share_state(self):
+        with patch("agent.email_index.INDEX_PATH", self.index.path), \
+                self.files.message_context(ImportClient([[create("projects/shared.md", "candidate")]]), emit=lambda _: None):
+            result = self.files.execute("import_message", dict(source="email", id=1523))
+        self.assertEqual(result["status"], "pending_review")
+        self.assertEqual(self.execute()["status"], "pending_review")
+        self.files.policy.confirm_transaction = lambda *args: "yes"
+        self.files.policy.request_commit()
+        self.assertTrue(self.index.get(1523)["imported"])
 
 
 if __name__ == "__main__":

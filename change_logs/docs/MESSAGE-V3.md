@@ -1,0 +1,72 @@
+# 第三阶段：统一 Message 查询与选择导入
+
+## 用法
+
+在已有 QQ 同步和 Email 索引基础上：
+
+```text
+/list_messages qq
+/list_messages qq {"imported":false,"limit":20}
+/list_messages email {"conversation":"INBOX","limit":10}
+/list_messages qq {"conversation":"group:123456","time_from":"2026-09-01T00:00:00+08:00","time_to":"2026-09-30T23:59:59+08:00"}
+/read_message qq <Message ID>
+/import_message qq <Message ID>
+/import_message email <Message ID>
+```
+
+将 `<Message ID>` 替换为列表中的完整整数。不要使用 QQ 原始 message_id 或自行缩短 ID。ID 跨来源唯一时可省略 source，如 `/import_message 1523`；有歧义会报错，要求明确来源。
+
+用户命令和 Agent 共用 `list_messages`、`read_message`、`import_message` 工具。仅查询或查看不导入，不修改 imported 或 Memory；用户明确选择一条消息并要求导入后，才运行导入流程。Email 查看完整正文可能下载并缓存 EML，但不会写 Memory 原文归档。
+
+列表按消息时间降序，时间相同按 ID 降序，未知时间最后；时间过滤使用带时区 ISO 8601，起止边界均包含，未知时间不会通过时间范围筛选。工具默认 20 条、最多 200 条。QQ conversation 支持会话 ID、`private:ID`/`group:ID` 或精确名称；Email 支持文件夹名或原始 Message-ID。推荐用带类型的 QQ 会话 ID 避免同名会话混淆。
+
+QQ 摘要包含 Message ID、时间、会话名称及 ID、发送者名称及 QQ、文字预览、imported。完整查看和导入都保留完整文字及空格/换行。Email 摘要保留主题、发件人及文件夹。
+
+## 链路梳理与抽取
+
+原有 Email 链路：EmailIndex 行 → Email Adapter → Message → 用户选择 ID → 下载/缓存 EML → MIME 解析及原文归档 → `run_turn()` → Temporary Memory → review。此前最后的 imported 标记只检查模型正常结束，可能早于 Memory 提交。
+
+真正属于 Email 的部分继续保留：IMAP host/account/folder/UIDVALIDITY/UID、缓存哈希、Message-ID 校验、MIME/附件元数据、subject/from/to、不可变 EML 归档、邮件写作及发送。
+
+通用部分已抽取：
+
+| 模块 | 职责 |
+| --- | --- |
+| `agent/messages/__init__.py` | 统一读取、会话/时间/imported/limit 过滤、摘要查询及全文查看 |
+| `agent/messages/sources.py` | 来源 registry，适配已有存储、来源准备、摘要及标记接口 |
+| `agent/messages/formatters.py` | QQ 上下文文字、Email 原有结构化输入与各自摘要 |
+| `agent/messages/importing.py` | 选择 ID、来源解析、导入锁、重复保护、公共完成状态 |
+| `agent/messages/processing.py` | 公共输入 → `run_turn()` → 工具失败检测与 Temporary 结果 |
+| `agent/messages/locking.py` | 跨进程单条导入锁，Email 旧模块继续导出兼容名称 |
+
+公共查询和导入协调层没有 QQ/Email 分支。新来源通过 registry 提供存储/准备适配及 formatter，复用选择、查询、Agent 执行和完成状态。公共 Message 顶层未增加字段。
+
+Email 的 `process_eml()` 保留为来源准备入口，并调用公共 `process_input()`；本地 EML CLI、原文归档、附件元数据及旧 `/import_email` 均保留。后者现在转发到公共 `import_message`。`message_context` / `processing_message` 为通用名称，旧 `email_context` / `processing_eml` 提供兼容别名。
+
+QQ 导入输入包含来源、时间、会话、发送者和完整文字，不包含 checkpoint、账号存储字段或 ID 哈希实现。它使用同一个 `run_turn()` 和 FileTools，不建立 QQ 专用 Agent。来源内容均标记为不可信数据，不能当作授权、工具指令或用户本人的写作证据。
+
+## imported 与 Memory 的统一边界
+
+| 情况 | 结果 |
+| --- | --- |
+| 正常处理，无待提交 Memory 修改 | processed，imported=true |
+| 正常处理，仍有 Temporary 修改 | pending_review，imported=false |
+| review 回答 no / self 审阅未完成 | Temporary 保留，imported=false |
+| 后续 /commit 正式提交 | 提交后回调来源存储，imported=true |
+| /cancel、显式 discard、正常退出 | 取消待导入完成回调，imported=false，释放导入锁 |
+| 模型异常、工具失败、Memory 冲突/提交失败 | imported=false；既有 Temporary 按原行为保留 |
+| 模型已提交 Memory 但最终回答失败 | imported=false，允许用户检查后重试 |
+| 记录已 imported | already_imported，不再次调用模型 |
+| 同一会话重复导入待审阅记录 | pending_review，不再次调用模型 |
+
+MemoryPolicy 仅提供通用的会话内完成回调，不认识 QQ/Email。待审阅消息的导入锁保留到提交或取消，其他 Memory 会话不能同时导入同一条记录。多个待审阅消息在同一 Temporary 事务中提交时分别标记。标记前再次核对来源身份，QQ 还核对完整内容，防止导入期间记录变化。
+
+Memory 提交与 Email JSON / QQ SQLite 不是跨存储原子事务。若正式提交后状态写入失败，保留已提交 Memory、消息保持未导入，commit 返回的 `message_imports` 包含错误；重试前应检查已有 Memory，避免重复候选。若进程异常终止，未完成标记保持 false；新进程按原 Memory 规则重置未提交 Temporary。异常退出可能留下单条 `.lock`，确认无导入进程后方可手工移除。此保守策略允许少量重试，不会仅因发送给模型就标记成功。
+
+历史版本已经标记 imported=true 的 Email 不自动重置；不能从现有数据推断其派生 Memory 是否最终获批。
+
+## 范围
+
+仅处理已经同步的 QQ 纯文字 Message。无 QQ 图片/文件/语音支持、无批量自动导入、无联系人画像、无群聊摘要；不增加后台同步、实时监听或 QQ Automation。原有其他来源 Automation 流程保留。
+
+测试使用隔离的合成消息、模拟模型/邮箱和真实 Memory 事务，不需要在线 NapCat 或真实 LLM。

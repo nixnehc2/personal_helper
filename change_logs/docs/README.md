@@ -88,11 +88,11 @@ python -m agent.email_index
 
 `/email <path>` 也通过注册的 `email` Tool 调用同一个 `process_eml()`。Agent 自主调用本地 `email` Tool 时路径仍限于 Memory 根目录；只有用户显式 `/email` 命令可授权读取所指定的外部 `.eml` 文件。原有 `ingest_email()` 保留为兼容转发，原本地 EML CLI 继续可用。MIME 解析、Agent、Temporary Memory 和 review 使用原有流程。Agent 在工具调用中触发 EML 处理时使用独立消息列表，避免向模型发送尚未配对的 tool_use；客户端、Memory 工具和 Temporary Transaction 仍是同一份。处理邮件期间禁止再次调用导入工具，避免递归导入。
 
-仅 `process_eml()` 正常完成且没有工具错误/Memory 冲突时写入 `imported=true` 和 UTC `imported_at`。仅下载成功、原文已归档、模型/Memory/索引写入失败均不算成功，保持未导入；失败后再次使用同一命令会复用可信 EML，并重新完成处理，不因原文已归档而跳过。处理过程中出现过工具错误时保守地视为失败，即使模型随后结束回答也不标记成功。
+`process_eml()` 正常完成且没有工具错误/Memory 冲突后，若无待提交修改即可写入 `imported=true` 和 UTC `imported_at`；若仍有 Temporary 修改则返回 `pending_review`，等待用户正式提交后再写入。仅下载成功、原文已归档、模型/Memory/索引写入失败均不算成功，保持未导入；失败后再次使用同一命令会复用可信 EML，并重新完成处理，不因原文已归档而跳过。处理过程中出现过工具错误时保守地视为失败，即使模型随后结束回答也不标记成功。
 
 原始 EML 在处理开始时立即归档至 `memory/inbox/email/<sha256>.eml`，并同步到 Temporary 的镜像；它是源文件留存，不是 Agent 的记忆修改，不计入待审文件数、不展示 diff、不要求用户确认。只有派生记忆才进入 Temporary review。仅归档原文的邮件不会提示“Temporary 保留 1 个文件”。拒绝提交、取消 Temporary 或重启均保留原文，模型失败也不会删除已归档原文。启动时会保留旧版仅存于 Temporary 中且 SHA-256 文件名校验通过的 EML；这不提交旧的派生记忆。
 
-**imported 表示 EML 已处理，不表示 Formal Memory 已提交。** 用户 review 回答 `no` 是现有流程的正常结果：Temporary 保留，导入仍可完成；后续提交/取消/新进程重置 Temporary 不会回滚 Email Index 的 imported 状态。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
+**第三阶段起 Email 与 QQ 共用完成语义：有派生修改时，正式提交后才 imported=true。** 用户 review 回答 `no` 时 Temporary 保留、imported=false；后续提交才标记，取消或退出不标记。旧版已标记的历史记录不自动重置。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
 
 本阶段没有新增自动导入或自动回复功能。测试使用模拟 IMAP、SMTP 和模型及临时目录，不导入真实个人邮件。
 
@@ -329,3 +329,19 @@ python -m unittest discover -s tests
 分页使用 NapCat 的 `message_seq` 和 `reverseOrder=true`，参考 [NapCat 历史消息 API](https://napneko.pages.dev/develop/api/doc)。需要支持该分页接口的 NapCat；同步不采用第一阶段样例读取器可能返回不完整结果的兼容回退。
 
 测试：`python -m unittest discover -s tests -p "test_qq*.py"`；完整回归：`python -m unittest discover -s tests`。
+
+
+## 第三阶段：统一 Message 查询、查看与选择导入
+
+详见 [统一 Message 流程与状态说明](MESSAGE-V3.md)。QQ 与 Email 共用以下命令：
+
+```text
+/list_messages qq
+/list_messages email {"imported":false,"limit":20}
+/list_messages qq {"conversation":"group:123456","time_from":"2026-09-01T00:00:00+08:00","limit":10}
+/read_message qq <ID>
+/import_message qq <ID>
+/import_message email <ID>
+```
+
+ID 在所有来源中唯一时可省略 source：`/import_message <ID>`。Agent 使用同名 `list_messages`、`read_message`、`import_message` 工具。查看不触发导入，只有用户明确选择后才调用导入；`/import_email` 是兼容入口。

@@ -43,32 +43,14 @@ def _process_eml(path, client, files, *, authored_by_user=False, reprocess=False
     if archive["duplicate"] and not reprocess:
         return dict(raw=archive, status="duplicate_skipped", note="Use --force to process the archived email again.")
     parsed = parse_bytes(raw)
-    old = files.incoming_email
-    files.incoming_email = not authored_by_user
-    if messages is None:
-        messages = []
-    start = len(messages)
-    previous_writes = files.writes.copy()
-    files.processing_eml = True
-    try:
-        decisions = run_turn(client, files, messages,
-                             "Ingest the following source data: " + json.dumps(dict(
-                                 raw_path=archive["path"], authored_by_user=authored_by_user,
-                                 email=parsed.model_data()), ensure_ascii=False),
-                             emit=emit, extra_system=INGEST_RULES)
-        written = files.writes.copy()
-        if not archive["duplicate"] and archive["path"] not in written:
-            written.insert(0, archive["path"])
-        failed = any(block.get("is_error") for message in messages[start:]
-                     if isinstance(message.get("content"), list)
-                     for block in message["content"] if block.get("type") == "tool_result")
-        failed = failed or any(change.get("conflict") for change in decisions.get("changes", []))
-        return dict(raw=archive, status="failed" if failed else "processed", written=written,
-                    temporary_written=list(files.policy.changes), review=decisions)
-    finally:
-        files.incoming_email = old
-        files.processing_eml = False
-        files.writes = list(dict.fromkeys(previous_writes + files.writes))
+    from .messages.formatters import format_email
+    from .messages.processing import process_input
+    result = process_input(format_email(parsed, raw_path=archive["path"], authored_by_user=authored_by_user),
+                           INGEST_RULES, client, files, messages=messages, emit=emit,
+                           runner=run_turn, incoming=not authored_by_user)
+    if not archive["duplicate"] and archive["path"] not in result["written"]:
+        result["written"].insert(0, archive["path"])
+    return dict(result, raw=archive)
 
 
 class DraftTools(FileTools):
