@@ -23,7 +23,10 @@ _IDENTITY_FIELDS = (
     "message_id",
 )
 
-# Payload fields parsed from the email header.
+# Payload fields parsed from the email header.  Some rows (especially
+# those created by ``EmailIndex.merge`` with minimal metadata) may not
+# contain every field here; the adapter uses ``dict.get`` so missing
+# fields produce ``None`` rather than a ``KeyError``.
 _CONTENT_FIELDS = (
     "subject",
     "from",
@@ -75,9 +78,11 @@ def email_row_to_message(row: dict[str, Any]) -> Message:
     # Preserve the raw date string.
     content["date"] = row["date"]
 
-    # Preserve remaining payload fields.
+    # Preserve remaining payload fields.  Use ``get`` so rows that
+    # predate the ``in_reply_to`` / ``references`` columns (or test
+    # fixtures that omit them) still convert cleanly.
     for key in _CONTENT_FIELDS:
-        content[key] = row[key]
+        content[key] = row.get(key, "")
 
     # Preserve any extra email-specific keys not already covered and
     # not explicitly excluded (future-proofing without polluting the
