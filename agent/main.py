@@ -11,6 +11,7 @@ import uuid
 
 from .llm import Client, load_config
 from .tools import FileTools, TOOLS
+from .debug_logger import agent_debug
 
 BOOTSTRAP = """You are a personal knowledge-base agent.
 长期提醒和监控请求必须使用 automation 工具保存，不写入 Memory，不生成或执行 SQL。
@@ -213,14 +214,17 @@ def confirm_batch(changes):
         return {}
 
 
-def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system="", emit_final=True):
+def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system="", emit_final=True,
+             trigger_type="user", session_id=None, automation_meta=None):
     # Tool-triggered ingestion uses its own transcript: the outer transcript has
     # an outstanding tool_use and cannot be sent to the model until it is answered.
     # It still shares the same client, FileTools and Temporary transaction.
-    with files.policy.scheduler.turn(emit), files.email_context(client, emit=emit):
-        return _run_turn(client, files, messages, user, emit, max_steps, extra_system, emit_final)
-
-
+    _sid = session_id or getattr(files.policy, "session", None) or "unknown"
+    with agent_debug.run(_sid, trigger_type, automation_meta=automation_meta,
+                         initial_context={"user_input": user, "extra_system": extra_system}):
+        with files.policy.scheduler.turn(emit), files.email_context(client, emit=emit):
+            return _run_turn(client, files, messages, user, emit, max_steps, extra_system, emit_final)
+            
 def refresh_memory_evidence(files, messages):
     """Re-read past retrievals under turn admission, preserving conversation text."""
     calls = {}
@@ -301,8 +305,10 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                 if call.get("name") == "edit_email":
                     # Include this turn's retrieval, but exclude the unanswered tool_use.
                     with files.email_context(client, messages=copy.deepcopy(messages[:-1]), emit=emit):
+                        files._debug_call_id = call.get("id")
                         result = files.execute(call.get("name"), call.get("input"))
                 else:
+                    files._debug_call_id = call.get("id")
                     result = files.execute(call.get("name"), call.get("input"))
                 if call.get("name") in ("edit_email", "send_email", "automation") and "error" not in result:
                     emit(safe_display(result["display"]))

@@ -31,3 +31,6 @@ node_modules/
 .memory-owner.lock
 .memory-rollback/
 .memory-commit.json
+
+# Agent debug logs
+/logs/

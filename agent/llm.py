@@ -55,6 +55,13 @@ class Client:
         self.opener = urllib.request.build_opener(NoRedirect())
 
     def complete(self, system, messages, tools):
+        from .debug_logger import current_run
+        run = current_run.get(None)
+        if run is not None:
+            try:
+                run.record_llm_input(system, messages, tools, model=self.model)
+            except Exception:
+                pass
         payload = dict(model=self.model, max_tokens=4096, system=system, messages=messages, tools=tools)
         headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01",
                    "Authorization": "Bearer " + self.token}
@@ -74,4 +81,9 @@ class Client:
             raise RuntimeError("LLM network error or timeout; no automatic retry") from None
         if not isinstance(result, dict) or not isinstance(result.get("content"), list):
             raise RuntimeError("API did not return Anthropic Messages content")
+        if run is not None:
+            try:
+                run.record_llm_response(result)
+            except Exception:
+                pass
         return result

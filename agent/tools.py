@@ -333,10 +333,26 @@ class FileTools:
     edit_memory = replace_text
 
     def execute(self, name, arguments):
+        from .debug_logger import current_run
+        run = current_run.get(None)
+        call_id = getattr(self, '_debug_call_id', None)
+        if run is not None:
+            try:
+                run.record_tool_start(name, call_id, arguments)
+            except Exception:
+                pass
         if name in ("email", "import_email", "edit_email", "send_email"):
             with self.policy.scheduler.turn():
-                return self._execute(name, arguments)
-        return self._execute(name, arguments)
+                result = self._execute(name, arguments)
+        else:
+            result = self._execute(name, arguments)
+        if run is not None:
+            try:
+                err = result.get("error") if isinstance(result, dict) else None
+                run.record_tool_result(call_id, result, error=err)
+            except Exception:
+                pass
+        return result
 
     def _execute(self, name, arguments):
         try:
