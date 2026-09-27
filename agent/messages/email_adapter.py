@@ -93,3 +93,38 @@ def email_row_to_message(row: dict[str, Any]) -> Message:
         imported=bool(row["imported"]),
         content=content,
     )
+
+
+# ---------------------------------------------------------------------------
+# Email-specific locator
+# ---------------------------------------------------------------------------
+
+_LOCATOR_KEYS = ("host", "account", "folder", "uidvalidity", "imap_uid", "message_id")
+
+# Subset used by mark-imported / EML identity checks.
+_IDENTITY_KEYS = ("id", "host", "account", "folder", "uidvalidity", "imap_uid", "message_id")
+
+
+def email_locator(message: Message) -> dict[str, Any]:
+    """Extract the IMAP-locator fields from an email Message.
+
+    Returns a dict with exactly the keys needed by ``download_eml``,
+    ``cached_eml``, ``read_event_email`` and ``mark_imported``.
+
+    Raises ``ValueError`` if *message* is not an email Message.
+    """
+    if message.source != "email":
+        raise ValueError("email_locator 只适用于 source='email' 的消息")
+    return {key: message.content[key] for key in _LOCATOR_KEYS}
+
+
+def email_identity(message: Message) -> dict[str, Any]:
+    """Return the full identity dict (including ``id``) for an email Message.
+
+    This mirrors the ``identity(row)`` helper previously in
+    ``agent.email_import`` and is used by EML-caching and event-stability
+    checks.
+    """
+    if message.source != "email":
+        raise ValueError("email_identity 只适用于 source='email' 的消息")
+    return {"id": message.id, **{key: message.content[key] for key in _LOCATOR_KEYS}}
