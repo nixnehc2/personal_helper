@@ -8,7 +8,9 @@ Covers:
   - Chinese / special characters / Unicode
   - Full real index compatibility (1741 emails)
   - Reverse identity-field verification
-  - imported/imported_at are NOT carried into content
+  - imported field mapping (True / False)
+  - imported_at is NOT carried into Message
+  - Conversion stability (idempotent)
 """
 
 from __future__ import annotations
@@ -75,11 +77,7 @@ class ParseDateTests(unittest.TestCase):
         self.assertIsNone(_parse_date("Aug 2024"))
 
     def test_iso_input_returns_none(self):
-        # parsedate_to_datetime expects RFC 2822; pure ISO may fail
-        # but that's fine -- we just check it doesn't crash.
         result = _parse_date("2024-08-29T16:18:48+00:00")
-        # This might actually parse depending on Python version; either
-        # outcome is acceptable as long as it doesn't raise.
         self.assertIsInstance(result, (str, type(None)))
 
 
@@ -134,6 +132,55 @@ class EmailRowToMessageNormalTests(unittest.TestCase):
     def test_id_not_in_content(self):
         self.assertNotIn("id", self.msg.content)
 
+    def test_imported_false_by_default(self):
+        self.assertFalse(self.msg.imported)
+
+
+class ImportedFieldTests(unittest.TestCase):
+    """imported is a top-level bool, mapped from EmailIndex."""
+
+    def test_imported_false(self):
+        row = _make_row(imported=False)
+        msg = email_row_to_message(row)
+        self.assertIs(msg.imported, False)
+
+    def test_imported_true(self):
+        row = _make_row(imported=True)
+        msg = email_row_to_message(row)
+        self.assertIs(msg.imported, True)
+
+    def test_imported_is_bool_type(self):
+        for val in (True, False):
+            msg = email_row_to_message(_make_row(imported=val))
+            self.assertIsInstance(msg.imported, bool)
+
+    def test_imported_at_not_on_message(self):
+        row = _make_row(imported=True,
+                         imported_at="2026-09-23T20:53:07.166184+00:00")
+        msg = email_row_to_message(row)
+        self.assertTrue(msg.imported)
+        # imported_at should not exist as a Message attribute
+        self.assertFalse(hasattr(msg, "imported_at"))
+        # and it should not leak into content either
+        self.assertNotIn("imported_at", msg.content)
+
+    def test_imported_not_in_content(self):
+        for val in (True, False):
+            msg = email_row_to_message(_make_row(imported=val))
+            self.assertNotIn("imported", msg.content)
+
+    def test_conversion_stability(self):
+        """Converting the same row twice must produce identical results."""
+        row = _make_row(imported=True,
+                         imported_at="2026-09-23T20:53:07+00:00")
+        msg1 = email_row_to_message(row)
+        msg2 = email_row_to_message(row)
+        self.assertEqual(msg1.id, msg2.id)
+        self.assertEqual(msg1.source, msg2.source)
+        self.assertEqual(msg1.time, msg2.time)
+        self.assertEqual(msg1.imported, msg2.imported)
+        self.assertEqual(msg1.content, msg2.content)
+
 
 class EmailRowToMessageMissingMessageId(unittest.TestCase):
     """Row with empty message_id should still convert."""
@@ -155,8 +202,6 @@ class EmailRowToMessageNoDate(unittest.TestCase):
         self.assertEqual(msg.content["date"], "")
 
     def test_none_like_date(self):
-        # date field is always a string in the index, but empty is
-        # the closest we can get to "missing".
         row = _make_row(date="")
         msg = email_row_to_message(row)
         self.assertIsNone(msg.time)
@@ -182,22 +227,16 @@ class EmailRowToMessageUnicode(unittest.TestCase):
     """Chinese and special characters must survive round-trip."""
 
     def test_chinese_subject_and_from(self):
-        row = _make_row(
-            subject="[pixiv] 验证码通知",
-            from_="pixiv事务局 <no-reply@pixiv.net>",
-        )
-        # 'from' is a Python keyword when used as kwarg; use dict override.
+        row = _make_row(subject="[pixiv] 验证码通知")
         row["from"] = "pixiv事务局 <no-reply@pixiv.net>"
         msg = email_row_to_message(row)
         self.assertEqual(msg.content["subject"], "[pixiv] 验证码通知")
-        self.assertEqual(msg.content["from"],
-                         "pixiv事务局 <no-reply@pixiv.net>")
+        self.assertEqual(msg.content["from"], "pixiv事务局 <no-reply@pixiv.net>")
 
     def test_special_html_chars(self):
         row = _make_row(subject="special | <>& \"quotes\"")
         msg = email_row_to_message(row)
-        self.assertEqual(msg.content["subject"],
-                         "special | <>& \"quotes\"")
+        self.assertEqual(msg.content["subject"], "special | <>& \"quotes\"")
 
     def test_emoji(self):
         row = _make_row(subject="Hello 🌍🚀")
@@ -212,8 +251,7 @@ class EmailRowToMessageUnicode(unittest.TestCase):
     def test_mixed_unicode_references(self):
         row = _make_row(references="<ref@example.com> <日本語@example.com>")
         msg = email_row_to_message(row)
-        self.assertEqual(msg.content["references"],
-                         "<ref@example.com> <日本語@example.com>")
+        self.assertEqual(msg.content["references"], "<ref@example.com> <日本語@example.com>")
 
 
 class RealIndexCompatibilityTest(unittest.TestCase):
@@ -231,8 +269,6 @@ class RealIndexCompatibilityTest(unittest.TestCase):
         self.assertEqual(len(self.messages), len(self.rows))
 
     def test_no_conversion_exceptions(self):
-        # setUpClass already ran email_row_to_message for every row.
-        # If we got here, no exceptions were raised.
         pass
 
     def test_ids_match(self):
@@ -267,8 +303,6 @@ class RealIndexCompatibilityTest(unittest.TestCase):
     def test_parsed_times_for_valid_dates(self):
         for row, msg in zip(self.rows, self.messages):
             if row["date"]:
-                # If the date is parseable, time should not be None.
-                # (Most real emails have parseable dates.)
                 try:
                     from email.utils import parsedate_to_datetime
                     parsedate_to_datetime(row["date"])
@@ -277,7 +311,6 @@ class RealIndexCompatibilityTest(unittest.TestCase):
                         msg=f"id={row['id']}: valid date but time=None",
                     )
                 except (ValueError, TypeError):
-                    # Unparseable => None is acceptable
                     pass
 
     def test_subjects_not_corrupted(self):
@@ -299,6 +332,14 @@ class RealIndexCompatibilityTest(unittest.TestCase):
             self.assertNotIn("imported", msg.content)
             self.assertNotIn("imported_at", msg.content)
 
+    def test_imported_mapped_correctly(self):
+        """Every real email's imported flag must be preserved exactly."""
+        for row, msg in zip(self.rows, self.messages):
+            self.assertIs(
+                msg.imported, bool(row["imported"]),
+                msg=f"id={row['id']}: imported mismatch",
+            )
+
 
 class ReverseIdentityVerificationTest(unittest.TestCase):
     """Verify that Message.content contains enough to locate the email."""
@@ -312,9 +353,6 @@ class ReverseIdentityVerificationTest(unittest.TestCase):
         cls.messages = [email_row_to_message(r) for r in cls.rows]
 
     def test_can_recover_identity_from_content(self):
-        """After converting to Message, critical identity fields
-        in content must exactly match the original row so that any
-        pipeline that only has a Message can still locate the email."""
         identity_keys = ("host", "account", "folder", "uidvalidity",
                          "imap_uid", "message_id")
         for row, msg in zip(self.rows, self.messages):

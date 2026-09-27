@@ -31,8 +31,9 @@ _CONTENT_FIELDS = (
     "references",
 )
 
-# imported / imported_at are workflow state maintained by
-# EmailIndex; they intentionally do NOT enter Message.content.
+# imported is now a top-level Message field (mapped directly).
+# imported_at stays in the old EmailIndex only; it is not carried over.
+# id is also a top-level field.
 _EXCLUDED_FIELDS = frozenset({"id", "imported", "imported_at"})
 
 
@@ -89,5 +90,6 @@ def email_row_to_message(row: dict[str, Any]) -> Message:
         id=row["id"],
         source="email",
         time=_parse_date(row["date"]),
+        imported=bool(row["imported"]),
         content=content,
     )

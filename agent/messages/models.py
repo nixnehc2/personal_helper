@@ -24,6 +24,10 @@ class Message:
     time:
         ISO 8601 string with timezone offset when the timestamp can be
         reliably parsed; ``None`` otherwise.
+    imported:
+        Whether this message has completed a Memory import pass.
+        ``True`` does not mean every detail was persisted -- only that
+        the message was processed and can be skipped on future runs.
     content:
         Source-specific payload.  For email this preserves every field
         the existing pipeline depends on (host, account, folder, ...).
@@ -32,4 +36,5 @@ class Message:
     id: int
     source: str
     time: str | None
+    imported: bool
     content: dict[str, Any] = field(default_factory=dict)
