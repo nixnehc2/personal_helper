@@ -80,7 +80,7 @@ class GetMessageTests(unittest.TestCase):
 
     def test_unsupported_source_raises(self):
         with self.assertRaises(ValueError):
-            get_message("qq", 1)
+            get_message("unsupported", 1)
 
     def test_imported_correctly_mapped(self):
         with unittest.mock.patch(INDEX_PATCH, self.index_path):
@@ -96,7 +96,7 @@ class SourceIdSemanticsTests(unittest.TestCase):
 
     def test_same_id_different_source_raises_for_unknown(self):
         with self.assertRaises(ValueError):
-            get_message("qq", 1)
+            get_message("unsupported", 1)
 
     def test_email_source_deterministic(self):
         tmp = tempfile.TemporaryDirectory()
@@ -140,7 +140,7 @@ class ListMessagesTests(unittest.TestCase):
 
     def test_list_unsupported_source(self):
         with self.assertRaises(ValueError):
-            list_messages("qq")
+            list_messages("unsupported")
 
 
 class EmailLocatorTests(unittest.TestCase):

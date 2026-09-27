@@ -314,3 +314,18 @@ python -m unittest discover -s tests
 ## 长期规则（第一阶段）
 
 通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则及新邮件并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。邮件规则首次成功同步建立基线，仅监控此后的新邮件。检查器不消费事件；聊天空闲时消费者自动启动独立 Windows 事件终端，完成后保存完整结果并提交通知。不接入 QQ 聊天消息或开机自启。第五阶段用法与边界见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，消费流程见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)，邮件来源及验收见 [AUTOMATIONS-V4.md](AUTOMATIONS-V4.md)。
+
+## QQ 第二阶段：纯文字同步
+
+在现有 `config.local.json` 配置 `QQ_API_URL`、`QQ_ACCESS_TOKEN`，启动并登录 NapCat 后，在聊天终端输入 `/update_qq`（也接受 `update_qq` 或 `update_qq()`）。Agent 调用同名无参数工具，均只执行一次同步，返回扫描、纯文字、新增、重复、跳过非文字和失败统计。
+
+- 范围为当前账号好友私聊及已加入群聊中 NapCat 可提供的历史记录。首次分页读取可用历史；之后从最新页向前读取，直到包含上次 checkpoint 的页面，页面内保留重叠并按 ID 去重。时间戳不参与增量判断。NapCat 未提供或已丢失的历史无法恢复。
+- 仅接受全部为 text 的消息，逐段拼接且不裁剪空格/换行。CQ 字符串中的复杂段、空消息、图片、文件、语音、视频、表情、回复、@、卡片和混合消息均整条跳过。
+- `Message` 顶层结构不变。QQ ID 是账号、会话类型、会话 ID 和原始 message_id 的 SHA-256 整数；QQ 专有信息保存在 content 的 text、sender、conversation、account_id、message_id。私聊对象取自请求会话，避免将本人发出的消息归到自己的会话。
+- `data/qq/messages.sqlite3` 的 messages 表保存统一 Message，checkpoints 表独立保存每账号/会话的原始消息 ID。两表在同一事务中提交，主键最终去重；数据库不提交 Git。统一读取入口支持 `get_message("qq", id)` / `list_messages("qq")`。
+- 单条文字转换失败不影响其他有效消息保存，但该会话 checkpoint 不推进；分页/API 失败回滚该会话，下次重试。其他会话继续同步；失败详情位于工具返回的 errors。分页不前进或超过 10000 页时报失败，不静默截断。
+- 不启动后台监听或定时器，不接入 Memory、Automation 或额外 Agent 处理。所有新消息 imported 为 false。
+
+分页使用 NapCat 的 `message_seq` 和 `reverseOrder=true`，参考 [NapCat 历史消息 API](https://napneko.pages.dev/develop/api/doc)。需要支持该分页接口的 NapCat；同步不采用第一阶段样例读取器可能返回不完整结果的兼容回退。
+
+测试：`python -m unittest discover -s tests -p "test_qq*.py"`；完整回归：`python -m unittest discover -s tests`。

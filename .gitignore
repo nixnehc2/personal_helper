@@ -9,6 +9,7 @@ __pycache__/
 /email_test/
 /data/email/
 /data/qq_samples/
+/data/qq/
 
 # Personal Memory is local-only and must never be published.
 /memory/

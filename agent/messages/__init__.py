@@ -3,7 +3,7 @@
 Provides `get_message` and `list_messages` as the single entry point
 for upper-layer code to access messages from any supported source.
 
-Currently only `"email"` is implemented, backed by
+Email is backed by
 :mod:gent.email_index and :mod:gent.messages.email_adapter.
 """
 
@@ -13,10 +13,11 @@ from typing import Any
 
 from .models import Message
 from .email_adapter import email_row_to_message
+from .qq_adapter import qq_to_message
 
-__all__ = ["Message", "email_row_to_message", "get_message", "list_messages"]
+__all__ = ["Message", "email_row_to_message", "qq_to_message", "get_message", "list_messages"]
 
-_SUPPORTED_SOURCES = ("email",)
+_SUPPORTED_SOURCES = ("email", "qq")
 
 
 def get_message(source: str, id: int) -> Message:
@@ -43,7 +44,9 @@ def get_message(source: str, id: int) -> Message:
 
         row = EmailIndex(INDEX_PATH).get(id)
         return email_row_to_message(row)
-    # Future sources (qq, wechat, ...) go here.
+    if source == "qq":
+        from agent.qq_sync import QQStore
+        return QQStore().get(id)
     raise ValueError(f"消息来源 {source!r} 暂未实现")
 
 
@@ -74,4 +77,7 @@ def list_messages(source: str, *, imported: bool | None = None) -> list[Message]
         if imported is not None:
             rows = [r for r in rows if bool(r["imported"]) == imported]
         return [email_row_to_message(r) for r in rows]
+    if source == "qq":
+        from agent.qq_sync import QQStore
+        return QQStore().list(imported)
     raise ValueError(f"消息来源 {source!r} 暂未实现")

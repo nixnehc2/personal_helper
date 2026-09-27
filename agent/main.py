@@ -438,6 +438,8 @@ def parse_tool_command(user):
         raise ValueError("无效 automation 命令或多余参数")
     if user in ("update_email", "update_email()", "/update_email"):
         return "update_email", {}
+    if user in ("update_qq", "update_qq()", "/update_qq"):
+        return "update_qq", {}
     parts = user.split()
     if parts and parts[0] == "/edit_email":
         tail = user.split(maxsplit=1)[1] if len(parts) > 1 else ""
@@ -595,7 +597,7 @@ def main():
                     elif name == "update_email":
                         print(safe_display(result["table"]))
                         print(safe_display(result["sync_summary"]))
-                    elif name in ("edit_email", "send_email", "automation"):
+                    elif name in ("edit_email", "send_email", "automation", "update_qq"):
                         print(safe_display(result["display"]))
                     else:
                         print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))

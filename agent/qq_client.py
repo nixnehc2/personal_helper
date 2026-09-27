@@ -127,6 +127,20 @@ class QQClient:
 
     # ---- public API ------------------------------------------------------
 
+    def get_history_page(self, chat_type, chat_id, count=100, message_seq=None):
+        """Strict oldest-first backward pagination; never mask API failures."""
+        if chat_type not in ("private", "group"):
+            raise ValueError("Unknown QQ conversation type")
+        action = "get_group_msg_history" if chat_type == "group" else "get_friend_msg_history"
+        key = "group_id" if chat_type == "group" else "user_id"
+        data = self._request(action, {
+            key: chat_id, "count": min(max(count, 2), MAX_MESSAGES),
+            "message_seq": message_seq, "reverseOrder": "true",
+        })
+        if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+            raise QQClientError("QQ 历史响应缺少 messages 数组")
+        return data["messages"]
+
     def get_login_info(self) -> dict[str, Any]:
         """Return ``{"user_id": int, "nickname": str}``."""
         data = self._request("get_login_info")
