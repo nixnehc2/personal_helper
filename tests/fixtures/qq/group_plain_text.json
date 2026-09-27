@@ -1,0 +1,89 @@
+[
+  {
+    "message_id": 200001,
+    "message_seq": 501,
+    "real_id": 200001,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727500200,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 1122334455,
+    "user_id": 11111111,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "大家好，本周五有例会"
+        }
+      }
+    ],
+    "raw_message": "大家好，本周五有例会",
+    "anonymous": null,
+    "sender": {
+      "user_id": 11111111,
+      "nickname": "群友甲",
+      "card": "组长-甲",
+      "role": "admin"
+    }
+  },
+  {
+    "message_id": 200002,
+    "message_seq": 502,
+    "real_id": 200002,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727500260,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 1122334455,
+    "user_id": 22222222,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "收到！"
+        }
+      }
+    ],
+    "raw_message": "收到！",
+    "anonymous": null,
+    "sender": {
+      "user_id": 22222222,
+      "nickname": "群友乙",
+      "card": "",
+      "role": "member"
+    }
+  },
+  {
+    "message_id": 200003,
+    "message_seq": 503,
+    "real_id": 200003,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727500320,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 1122334455,
+    "user_id": 87654321,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "好的，我会准时参加"
+        }
+      }
+    ],
+    "raw_message": "好的，我会准时参加",
+    "anonymous": null,
+    "sender": {
+      "user_id": 87654321,
+      "nickname": "我自己",
+      "card": "我自己",
+      "role": "owner"
+    }
+  }
+]

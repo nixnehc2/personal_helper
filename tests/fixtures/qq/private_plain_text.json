@@ -1,0 +1,83 @@
+[
+  {
+    "message_id": 100001,
+    "message_seq": 101,
+    "real_id": 100001,
+    "message_type": "private",
+    "sub_type": "friend",
+    "time": 1727500001,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "user_id": 12345678,
+    "target_id": 87654321,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "你好呀"
+        }
+      }
+    ],
+    "raw_message": "你好呀",
+    "sender": {
+      "user_id": 12345678,
+      "nickname": "测试用户A",
+      "card": ""
+    }
+  },
+  {
+    "message_id": 100002,
+    "message_seq": 102,
+    "real_id": 100002,
+    "message_type": "private",
+    "sub_type": "friend",
+    "time": 1727500062,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "user_id": 87654321,
+    "target_id": 12345678,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "你好，有什么事吗？"
+        }
+      }
+    ],
+    "raw_message": "你好，有什么事吗？",
+    "sender": {
+      "user_id": 87654321,
+      "nickname": "我自己",
+      "card": ""
+    }
+  },
+  {
+    "message_id": 100003,
+    "message_seq": 103,
+    "real_id": 100003,
+    "message_type": "private",
+    "sub_type": "friend",
+    "time": 1727500123,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "user_id": 12345678,
+    "target_id": 87654321,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "明天下午三点开会，记得来哦"
+        }
+      }
+    ],
+    "raw_message": "明天下午三点开会，记得来哦",
+    "sender": {
+      "user_id": 12345678,
+      "nickname": "测试用户A",
+      "card": ""
+    }
+  }
+]

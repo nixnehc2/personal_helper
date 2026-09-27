@@ -1,0 +1,177 @@
+[
+  {
+    "message_id": 300001,
+    "message_seq": 801,
+    "real_id": 300001,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727501000,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 9988776655,
+    "user_id": 33333333,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "看看这个设计稿"
+        }
+      }
+    ],
+    "raw_message": "看看这个设计稿",
+    "anonymous": null,
+    "sender": {
+      "user_id": 33333333,
+      "nickname": "设计师小王",
+      "card": "",
+      "role": "member"
+    }
+  },
+  {
+    "message_id": 300002,
+    "message_seq": 802,
+    "real_id": 300002,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727501060,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 9988776655,
+    "user_id": 44444444,
+    "message": [
+      {
+        "type": "reply",
+        "data": {
+          "id": "300001"
+        }
+      },
+      {
+        "type": "at",
+        "data": {
+          "qq": "33333333",
+          "name": "设计师小王"
+        }
+      },
+      {
+        "type": "text",
+        "data": {
+          "text": " 这个配色不错，但是logo需要再大一点"
+        }
+      }
+    ],
+    "raw_message": "[CQ:reply,id=300001][CQ:at,qq=33333333] 这个配色不错，但是logo需要再大一点",
+    "anonymous": null,
+    "sender": {
+      "user_id": 44444444,
+      "nickname": "产品经理老李",
+      "card": "PM-老李",
+      "role": "admin"
+    }
+  },
+  {
+    "message_id": 300003,
+    "message_seq": 803,
+    "real_id": 300003,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727501120,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 9988776655,
+    "user_id": 33333333,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "好的，我改一下\n"
+        }
+      },
+      {
+        "type": "image",
+        "data": {
+          "file": "abc123.image",
+          "url": "https://example.com/hidden/image.jpg",
+          "subType": 0,
+          "file_size": 123456
+        }
+      }
+    ],
+    "raw_message": "好的，我改一下\n[CQ:image,file=abc123.image,url=https://example.com/hidden/image.jpg]",
+    "anonymous": null,
+    "sender": {
+      "user_id": 33333333,
+      "nickname": "设计师小王",
+      "card": "",
+      "role": "member"
+    }
+  },
+  {
+    "message_id": 300004,
+    "message_seq": 804,
+    "real_id": 300004,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727501180,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 9988776655,
+    "user_id": 55555555,
+    "message": [
+      {
+        "type": "face",
+        "data": {
+          "id": "178"
+        }
+      }
+    ],
+    "raw_message": "[CQ:face,id=178]",
+    "anonymous": null,
+    "sender": {
+      "user_id": 55555555,
+      "nickname": "潜水员",
+      "card": "",
+      "role": "member"
+    }
+  },
+  {
+    "message_id": 300005,
+    "message_seq": 805,
+    "real_id": 300005,
+    "message_type": "group",
+    "sub_type": "normal",
+    "time": 1727501240,
+    "font": 14,
+    "message_format": "array",
+    "post_type": "message",
+    "group_id": 9988776655,
+    "user_id": 87654321,
+    "message": [
+      {
+        "type": "text",
+        "data": {
+          "text": "文件我放在共享盘了 "
+        }
+      },
+      {
+        "type": "file",
+        "data": {
+          "file": "设计稿v2.psd",
+          "file_id": "file123abc",
+          "file_size": 5242880
+        }
+      }
+    ],
+    "raw_message": "文件我放在共享盘了 [CQ:file,file=设计稿v2.psd,file_id=file123abc,file_size=5242880]",
+    "anonymous": null,
+    "sender": {
+      "user_id": 87654321,
+      "nickname": "我自己",
+      "card": "我自己",
+      "role": "owner"
+    }
+  }
+]
