@@ -25,6 +25,7 @@ class DraftTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(lambda: self.files.policy.close())
         self.root = Path(tmp.name) / "memory"
         self.root.mkdir()
         (self.root / "AGENT.md").write_text("Read _INDEX.md first.", encoding="utf-8")

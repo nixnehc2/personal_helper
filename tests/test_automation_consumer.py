@@ -16,7 +16,7 @@ from agent.tools import FileTools, TOOLS
 
 
 def answer(text="请检查申请材料。"):
-    return dict(content=[dict(type="text", text=text)], stop_reason="end_turn")
+    return call("complete_event", reply=text)
 
 
 def call(name, **arguments):
@@ -44,7 +44,7 @@ class ConsumerTests(unittest.TestCase):
         return self.store.manage("get", id)["rule"]
 
     def consume(self, emit=lambda _: None):
-        return consume_once(self.client, self.files, self.store, emit)
+        return consume_once(self.client, self.files, self.store, emit, read=lambda _: "/exit")
 
     def test_persist_before_display_and_once_completion(self):
         self.files.active_email_draft_id = 27
@@ -146,11 +146,13 @@ print(json.dumps(result))
         snapshot = self.row()["pending_events"][0]["content"]
         self.store.manage("update", 1, dict(content="changed instruction"))
         self.client.complete.side_effect = [call("write_memory", path="pending/note.md", content="candidate"),
-                                            call("commit_memory_changes"), answer()]
+                                            call("commit_memory_changes"), dict(content=[dict(type="text", text="请反馈修改意见")], stop_reason="end_turn")]
         self.consume()
         self.confirm.assert_called_once()
         self.assertFalse((self.root / "pending/note.md").exists())
-        self.assertTrue(self.files.policy.changes)
+        self.assertFalse(self.files.policy.changes)
+        self.assertTrue(self.row()["pending_events"][0]["suspended"])
+        self.assertIsNone(self.row()["pending_events"][0]["reply"])
         user = self.client.complete.call_args_list[0].args[1][0]["content"]
         self.assertIn(snapshot, user)
         self.assertNotIn("changed instruction", user)
@@ -204,7 +206,7 @@ print(json.dumps(result))
         inputs = []
         def complete(system, messages, tools):
             inputs.append(json.loads(json.dumps(messages)))
-            return answer()
+            return answer() if any(t["name"] == "complete_event" for t in tools) else dict(content=[dict(type="text", text="chat")], stop_reason="end_turn")
         self.client.complete.side_effect = complete
         with patch("agent.automation_consumer.AutomationStore", return_value=self.store), \
              patch("sys.argv", ["agent.main", "--root", str(self.root)]), \

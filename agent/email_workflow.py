@@ -29,6 +29,12 @@ def ingest_email(path, client, files, **kwargs):
 
 
 def process_eml(path, client, files, *, authored_by_user=False, reprocess=False, emit=print, messages=None):
+    with files.policy.scheduler.turn(emit):
+        return _process_eml(path, client, files, authored_by_user=authored_by_user,
+                            reprocess=reprocess, emit=emit, messages=messages)
+
+
+def _process_eml(path, client, files, *, authored_by_user=False, reprocess=False, emit=print, messages=None):
     """Shared EML → Agent → Temporary Memory pipeline for all email sources."""
     if files.processing_eml:
         raise ValueError("邮件处理期间不允许递归导入另一封邮件")

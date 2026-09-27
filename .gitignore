@@ -25,3 +25,9 @@ node_modules/
 /data/automations.sqlite3*
 /data/automations.checker.lock
 /data/automations.consumer.lock
+
+/data/runtime/
+/data/results/
+.memory-owner.lock
+.memory-rollback/
+.memory-commit.json

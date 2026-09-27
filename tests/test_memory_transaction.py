@@ -12,6 +12,7 @@ class TransactionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name) / "memory"
         self.root.mkdir()
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
@@ -135,10 +136,12 @@ class TransactionTests(unittest.TestCase):
         import hashlib
         raw = b"legacy pending raw"
         path = f"inbox/email/{hashlib.sha256(raw).hexdigest()}.eml"
-        target = self.files.workspace_root / path
+        temporary = self.root / ".memory-temporary"
+        (temporary / "projects").mkdir(parents=True)
+        target = temporary / path
         target.parent.mkdir(parents=True)
         target.write_bytes(raw)
-        (self.files.workspace_root / "projects/b.md").write_text("unapproved", encoding="utf-8")
+        (temporary / "projects/b.md").write_text("unapproved", encoding="utf-8")
         self.files = self.open_files()
         self.assertEqual((self.root / path).read_bytes(), raw)
         self.assertFalse((self.root / "projects/b.md").exists())
@@ -153,14 +156,16 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual((self.root / archive["path"]).read_bytes(), b"raw email")
         self.assertEqual(self.approvals, [])
 
-    def test_new_session_resets_stale_temporary_from_formal(self):
+    def test_new_session_preserves_live_owner_transaction(self):
         self.files.write_memory("projects/b.md", "temporary")
         self.assertTrue((self.files.workspace_root / "projects/b.md").exists())
         reopened = self.open_files()
         self.assertIn("error", reopened.execute("read_memory", {"path": "projects/b.md"}))
         self.assertFalse((reopened.workspace_root / "projects/b.md").exists())
-        self.assertFalse(self.state()["active"])
-        self.assert_synchronized()
+        self.assertTrue(self.state()["active"])
+        self.assertEqual(self.files.read_memory("projects/b.md")["content"], "temporary")
+        self.assertEqual(reopened.policy.discard(explicit=True)["status"], "no_changes")
+        self.assertTrue(self.files.policy._active())
 
     def test_runtime_error_does_not_discard_active_transaction(self):
         self.files.write_memory("projects/b.md", "temporary")

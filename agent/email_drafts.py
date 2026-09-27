@@ -101,6 +101,11 @@ def parse_draft(blocks):
 
 
 def edit_email(instruction, draft_id, client, files, messages=None, emit=print):
+    with files.policy.scheduler.turn(emit):
+        return _edit_email(instruction, draft_id, client, files, messages, emit)
+
+
+def _edit_email(instruction, draft_id, client, files, messages=None, emit=print):
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("写作要求不能为空")
     store = DraftStore()

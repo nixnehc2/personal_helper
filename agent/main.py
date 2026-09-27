@@ -19,7 +19,7 @@ content 必须包含脱离原对话也能理解的完整执行指令，不依赖
 不能猜测导师邮箱、目标邮件 Message-ID 或缺失的必要时间；先查已有信息，仍不明确则询问。
 根据需求生成结构化时间配置或五字段 Cron；不能准确表达则明确说明，不替换为近似周期。
 成功后展示规则编号、触发条件、执行指令、持续方式、状态；定时规则同时展示工具返回的时区和时间预览。
-必须明确告知：规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。不得宣称将自动检查或发送提醒。
+必须明确告知：规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，聊天启动后空闲时自动消费并打开独立事件终端，完成后提交 Windows 通知；检查器仍须单独启动。
 Before answering, asking a clarification question, or making a tool call, determine whether its
 correctness depends on user-specific information. This applies to final answer content and to every
 intermediate value or tool argument, including identity, preferences, contact details, project
@@ -217,8 +217,26 @@ def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_syst
     # Tool-triggered ingestion uses its own transcript: the outer transcript has
     # an outstanding tool_use and cannot be sent to the model until it is answered.
     # It still shares the same client, FileTools and Temporary transaction.
-    with files.email_context(client, emit=emit):
+    with files.policy.scheduler.turn(emit), files.email_context(client, emit=emit):
         return _run_turn(client, files, messages, user, emit, max_steps, extra_system, emit_final)
+
+
+def refresh_memory_evidence(files, messages):
+    """Re-read past retrievals under turn admission, preserving conversation text."""
+    calls = {}
+    for message in messages:
+        blocks = message.get("content")
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if block.get("type") == "tool_use" and block.get("name") in (
+                    "read_memory", "search_memory", "search_files", "list_directory"):
+                calls[block.get("id")] = block
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+                call = calls[block["tool_use_id"]]
+                refreshed = files.execute(call["name"], call["input"])
+                block["content"] = json.dumps(dict(runtime_refreshed=True, **refreshed), ensure_ascii=False)
+                block["is_error"] = "error" in refreshed
 
 
 def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system="", emit_final=True):
@@ -228,6 +246,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
         messages.append(dict(role="user", content="Runtime: user explicitly cancelled the Memory transaction. Temporary changes were discarded."))
         return result
     files.writes = []
+    refresh_memory_evidence(files, messages)
     # Refresh the protocol each turn so approved protocol edits take effect next turn.
     protocol = files.text(files.path("AGENT.md"))
     root_index_path = files.path("_INDEX.md")
@@ -240,6 +259,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
               + "\n" + extra_system)
     if self_index:
         system += "\nKnowledge-base self index (self/_INDEX.md):\n" + self_index
+    system += "\nPrevious Memory tool results may be stale after other sessions commit. Re-read relevant Memory before using it or editing; historical tool results are not current evidence."
     system += ("\nRuntime current local time: " + datetime.now().astimezone().isoformat(timespec="seconds")
                + ". Compare event dates against this time. Never present a past deadline as an upcoming reminder;"
                  " describe it as expired/historical when relevant. Do not infer current status solely from old mail.")
@@ -273,6 +293,8 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                 if state["changes"]:
                     emit(f"[memory] Temporary 保留 {len(state['changes'])} 个文件的修改；尚未提交。")
                 return state
+            if any(c.get("name") == "complete_event" for c in calls) and len(calls) != 1:
+                raise ValueError("complete_event 必须单独调用，且在其他工具全部结束后调用")
             results = []
             for call in calls:
                 emit(tool_summary(call))
@@ -297,6 +319,9 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                 results.append(dict(type="tool_result", tool_use_id=call["id"],
                                     content=json.dumps(result, ensure_ascii=False), is_error="error" in result))
             messages.append(dict(role="user", content=results))
+            if getattr(files, "event_complete", False) and not files.policy._active():
+                messages.append(dict(role="assistant", content=[dict(type="text", text=files.event_reply)]))
+                return files.show_memory_changes()
         raise RuntimeError("达到工具循环上限；本轮可能只完成了部分工作；Temporary 已保留")
     except BaseException:
         raise
@@ -400,13 +425,28 @@ def parse_tool_command(user):
 def main():
     parser = argparse.ArgumentParser(description="Personal Agent V1")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent / "memory")
+    parser.add_argument("--event")
+    parser.add_argument("--rule", type=int)
+    parser.add_argument("--store", type=Path)
+    parser.add_argument("--claim")
     args = parser.parse_args()
     history = None
+    event_lock = None
+    exit_handler = None
+    if args.event:
+        from .event_runtime import claim_lock, console_exit_handler
+        from .automations import AutomationStore
+        event_lock = claim_lock(args.event)
+        if not event_lock.acquire():
+            print("事件已有活动终端。")
+            return 1
+        exit_handler = console_exit_handler(AutomationStore(args.store), args.rule, args.event)
+        exit_handler.__enter__()
     try:
         files = FileTools(args.root, confirm_batch)
-        history = RunHistory(files.root / HISTORY_NAME)
+        history = RunHistory(files.root / HISTORY_NAME, files.policy.session)
         files.text(files.path("AGENT.md"))
-        print("[memory] 已用 Formal Memory 初始化 Temporary Memory。")
+        print("[memory] 只读正式 Memory；首次修改时创建所属会话的 Temporary 事务。")
         config = load_config()
         token = config.get("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_AUTH_TOKEN") or getpass.getpass("API token（不回显、不保存）：")
         if not token:
@@ -417,72 +457,118 @@ def main():
         if history is not None:
             history.append("startup_error", error=repr(error))
         print("启动失败：" + str(error))
+        if event_lock is not None:
+            from .event_runtime import failure
+            failure(AutomationStore(args.store), args.rule, args.event, error)
+            event_lock.release()
+            exit_handler.__exit__(None, None, None)
         return 1
     print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/import_email <id> 导入单封邮件，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求。/send_email <草稿 ID> 展示并确认后通过 SMTP 发送。")
     print("/automation list 查看规则；get/create/update/pause/resume/cancel 管理规则；check 检查一次；pending [规则编号] 查看待处理事件；consume 手动执行并展示回复。")
+    print("/commit 审阅提交；/scheduler 锁与排队；/automation active 活动事件；/automation auto pause|resume；/automation event-resume <事件ID>；/results [事件ID] 完整结果。")
     print(f"[history] 排错历史将追加到 {history.path}")
+    from .event_runtime import BackgroundConsumer, run_event, management, attention
+    from .automations import AutomationStore
+    store = AutomationStore(args.store)
+    if args.event:
+        def transaction(action, changes):
+            attention(args.event)
+            return confirm_transaction(action, changes)
+        def email(draft):
+            attention(args.event)
+            return confirm_email(draft)
+        def batch(changes):
+            attention(args.event)
+            return confirm_batch(changes)
+        files.policy.confirm_transaction = transaction
+        files.policy.confirm_batch = batch
+        files.confirm_email = email
+        try:
+            run_event(client, files, store, args.rule, args.event, args.claim, lock=event_lock)
+        finally:
+            exit_handler.__exit__(None, None, None)
+        return 0
+    background = BackgroundConsumer(files, store)
+    background.start()
     messages = []
-    while True:
-        try:
-            user = input("\n你> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            history.append("session_end", reason="eof_or_interrupt")
-            print("\n已退出。")
-            break
-        if user == "/exit":
-            history.append("command", command="/exit")
-            history.append("session_end", reason="exit")
-            break
-        if user == "/clear":
-            messages.clear()
-            files.active_email_draft_id = None
-            history.append("command", command="/clear", note="conversation cleared; history retained")
-            print("对话已清空，知识库未修改。")
-            continue
-        if not user:
-            continue
-        history.append("user_input", text=user)
-        transcript_start = len(messages)
-        try:
-            command = parse_tool_command(user)
-            if command is not None and command[0] == "automation_consume":
-                from .automation_consumer import consume_once
-                result = consume_once(client, files)
-                print(safe_display(result["display"]))
-            elif command is not None and command[0] == "automation_diagnostic":
-                from .automation_checker import check_once, pending
-                arguments = command[1]
-                result = check_once() if arguments["action"] == "check" else pending(id=arguments["id"])
-                print(safe_display(result["display"]))
-            elif command is None:
-                result = run_turn(client, files, messages, user)
-            else:
-                name, arguments = command
-                print(tool_summary(dict(name=name, input=arguments)))
-                with files.email_context(client, messages=messages,
-                                         explicit_email_path=arguments["path"] if name == "email" else None):
-                    result = files.execute(name, arguments)
-                if "error" in result:
-                    print("[error] " + safe_display(result["error"]))
-                elif name == "update_email":
-                    print(safe_display(result["table"]))
-                    print(safe_display(result["sync_summary"]))
-                elif name in ("edit_email", "send_email", "automation"):
+    try:
+        while True:
+            try:
+                user = input("\n你> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                history.append("session_end", reason="eof_or_interrupt")
+                print("\n已退出。")
+                break
+            if user == "/exit":
+                history.append("command", command="/exit")
+                history.append("session_end", reason="exit")
+                break
+            if user == "/clear":
+                messages.clear()
+                files.active_email_draft_id = None
+                history.append("command", command="/clear", note="conversation cleared; history retained")
+                print("对话已清空，知识库未修改。")
+                continue
+            if not user:
+                continue
+            try:
+                if management(user, files, store):
+                    continue
+                if user == "/cancel":
+                    print(files.policy.discard(explicit=True))
+                    continue
+                if user == "/commit":
+                    with files.policy.scheduler.turn():
+                        print(files.policy.request_commit())
+                    continue
+            except (Exception, KeyboardInterrupt) as error:
+                print("命令失败，当前事务保留：" + safe_display(str(error)))
+                continue
+            history.append("user_input", text=user)
+            transcript_start = len(messages)
+            try:
+                command = parse_tool_command(user)
+                if command is not None and command[0] == "automation_consume":
+                    from .automation_consumer import consume_once
+                    result = consume_once(client, files)
                     print(safe_display(result["display"]))
+                elif command is not None and command[0] == "automation_diagnostic":
+                    from .automation_checker import check_once, pending
+                    arguments = command[1]
+                    result = check_once() if arguments["action"] == "check" else pending(id=arguments["id"])
+                    print(safe_display(result["display"]))
+                elif command is None:
+                    result = run_turn(client, files, messages, user)
                 else:
-                    print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))
-                # Keep the explicit command and its outcome visible to later chat.
-                messages.extend([dict(role="user", content=user),
-                                 dict(role="assistant", content=json.dumps(result, ensure_ascii=False))])
-            history.append("turn_complete", user=user, messages=messages[transcript_start:],
-                           result=result, temporary_writes=files.writes)
-        except (Exception, KeyboardInterrupt) as error:
-            history.append("turn_error", user=user, messages=messages[transcript_start:],
-                           error=repr(error), temporary_writes=files.writes)
-            print("本轮中止：" + safe_display(str(error)))
-            print("本轮已写入：" + safe_display(", ".join(files.writes) or "无"))
-            print("未提交 Temporary 已保留；下次启动会从 Formal Memory 重新初始化。")
+                    name, arguments = command
+                    print(tool_summary(dict(name=name, input=arguments)))
+                    with files.email_context(client, messages=messages,
+                                             explicit_email_path=arguments["path"] if name == "email" else None):
+                        result = files.execute(name, arguments)
+                    if "error" in result:
+                        print("[error] " + safe_display(result["error"]))
+                    elif name == "update_email":
+                        print(safe_display(result["table"]))
+                        print(safe_display(result["sync_summary"]))
+                    elif name in ("edit_email", "send_email", "automation"):
+                        print(safe_display(result["display"]))
+                    else:
+                        print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))
+                    # Keep the explicit command and its outcome visible to later chat.
+                    messages.extend([dict(role="user", content=user),
+                                     dict(role="assistant", content=json.dumps(result, ensure_ascii=False))])
+                history.append("turn_complete", user=user, messages=messages[transcript_start:],
+                               result=result, temporary_writes=files.writes)
+            except (Exception, KeyboardInterrupt) as error:
+                history.append("turn_error", user=user, messages=messages[transcript_start:],
+                               error=repr(error), temporary_writes=files.writes)
+                print("本轮中止：" + safe_display(str(error)))
+                print("本轮已写入：" + safe_display(", ".join(files.writes) or "无"))
+                print("未提交 Temporary 已保留；本会话可继续修改、/commit 或 /cancel。")
+    finally:
+        background.close()
+        files.policy.close()
     return 0
 
 

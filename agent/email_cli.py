@@ -75,6 +75,9 @@ def main():
             print("已写入（不会自动回滚）：" + safe_display(", ".join(files.writes) or "无"))
             print("未提交 Temporary 已保留；下一次命令启动会从 Formal Memory 重新初始化。")
         return 1
+    finally:
+        if files is not None:
+            files.policy.close()
 
 
 if __name__ == "__main__":

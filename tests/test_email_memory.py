@@ -33,6 +33,7 @@ class EmailMemoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name) / "memory"
         initialize_test_memory(self.root)
         self.reviews = []

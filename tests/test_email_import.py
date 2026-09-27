@@ -80,6 +80,7 @@ class ImportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(lambda: self.files.policy.close())
         self.base = Path(self.tmp.name)
         self.root = self.base / "memory"
         self.root.mkdir()

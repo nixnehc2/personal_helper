@@ -18,6 +18,7 @@ class RunHistoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name)
         self.path = self.root / HISTORY_NAME
 
@@ -65,6 +66,7 @@ class ToolTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name)
         self.files = FileTools(self.root, lambda changes: {i: c.after for i, c in enumerate(changes)}, lambda action, changes: "yes")
         (self.root / "projects").mkdir(exist_ok=True)
@@ -198,6 +200,7 @@ class MemoryRetrievalPolicyTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name)
         self.files = FileTools(self.root, lambda changes: {}, lambda action, changes: "yes")
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")
@@ -306,6 +309,7 @@ class ToolLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(lambda: getattr(self, "files", None) and self.files.policy.close())
         self.root = Path(self.temp.name)
         self.files = FileTools(self.root, lambda changes: {i: c.after for i, c in enumerate(changes)}, lambda action, changes: "yes")
         (self.root / "projects").mkdir(exist_ok=True)

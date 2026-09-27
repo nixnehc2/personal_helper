@@ -32,7 +32,7 @@ class EmailAutomationTests(unittest.TestCase):
         (self.root / "AGENT.md").write_text("Test", encoding="utf-8")
         self.files = FileTools(self.root, lambda _: {}, lambda *args: "no")
         self.client = Mock()
-        self.client.complete.return_value = dict(content=[dict(type="text", text="邮件总结")], stop_reason="end_turn")
+        self.client.complete.return_value = dict(content=[dict(type="tool_use", name="complete_event", id="done", input=dict(reply="邮件总结"))], stop_reason="tool_use")
 
     def create(self, match=None, mode="continuous"):
         rule = fixtures.mail()

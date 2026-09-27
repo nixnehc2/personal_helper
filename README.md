@@ -29,7 +29,7 @@ python -m agent.main
 
 指定另一份知识库：`python -m agent.main --root C:\path\to\memory`。该目录必须已经存在并包含 `AGENT.md`。
 
-输入 `/exit` 退出但保留未提交 Temporary，`/clear` 仅清空进程内对话（Temporary 保留），`/cancel` 明确放弃整个 Temporary Transaction。每次启动新 Agent 进程时都会用 Formal Memory 完整覆盖 Temporary，因此会话开始时 Temporary 与 Formal Memory 一致。
+输入 `/exit` 退出并取消当前会话的未提交事务，`/clear` 仅清空对话（事务保留），`/cancel` 放弃当前会话的事务，`/commit` 展示 diff 并要求明确 yes。首次修改才创建 Temporary；其他会话不能覆盖活动事务。多终端共享轮次锁；持有 Memory 事务的会话在提交、取消或退出前独占 Agent。第五阶段的自动消费、独立事件终端、结果与 Windows 通知见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。
 
 在普通聊天进程中导入邮件：
 
@@ -45,7 +45,7 @@ python -m agent.main --root memory
 
 可选项与原邮件命令一致：`--authored-by-user` 仅用于你本人写作或认可的邮件，`--reprocess` 用于前次模型处理失败后的显式重试。邮件导入作为同一轮对话运行：解码邮件附加专门的导入规则，但消息列表与后续提问连续保留；输入 `no` 后可以直接继续反馈，让 Agent 修改 Temporary，再重新申请 commit。
 
-所有新增、修改和删除均先进入 Temporary。Agent 会主动把可能有长期价值的信息（例如偏好、目标、项目状态和持续关注主题）写成 Temporary 候选，不要求用户先说“记住”；普通知识问答、随机闲聊和无依据推测不机械写入。可能长期有用但还不够稳定或明确的信息先进入 `pending/`，后续优先更新已有候选、合并重复项或删除被否定项；成熟后迁移到正式分类并删除原 Pending。Agent 认为本批修改完成后调用 `commit_memory_changes` 进入 review，Runtime 展示完整 diff。只有精确输入 `yes` 才批准，`no` 或其他输入均保留 Temporary，随后可以继续反馈修改；只有明确 discard/cancel 才放弃。消息结束、异常中止或进程退出都不会清理 Temporary；下一次 Agent 进程启动时统一从 Formal 重新初始化。
+所有新增、修改和删除均先进入 Temporary。Agent 会主动把可能有长期价值的信息（例如偏好、目标、项目状态和持续关注主题）写成 Temporary 候选，不要求用户先说“记住”；普通知识问答、随机闲聊和无依据推测不机械写入。可能长期有用但还不够稳定或明确的信息先进入 `pending/`，后续优先更新已有候选、合并重复项或删除被否定项；成熟后迁移到正式分类并删除原 Pending。Agent 认为本批修改完成后调用 `commit_memory_changes` 进入 review，Runtime 展示完整 diff。只有精确输入 `yes` 才批准，`no` 或其他输入均保留 Temporary，随后可以继续反馈修改；只有明确 discard/cancel 才放弃。消息结束或单轮异常不清理当前事务；正常退出取消事务，崩溃遗留事务在后续进程安全取得所有权锁后清理。
 
 `self/` 在统一确认后还有额外审阅。全部 self 修改均获准才提交整笔事务；部分接受或拒绝不落盘，整个 Temporary 保留。审阅时编辑的内容先保存在 Temporary，需要再次 commit 确认新 diff。
 
@@ -147,13 +147,13 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 ## 限制与取舍
 
 - 首版只支持 UTF-8 文本，每个文件最多 100000 字节。长单行读取可能截断；返回值会明确说明。
-- 搜索使用标准库逐文件扫描，避免依赖 ripgrep，保留相同根目录检查；没有 shell、数据库、向量搜索或后台任务。
+- 搜索使用标准库逐文件扫描，避免依赖 ripgrep，保留相同根目录检查；Memory 工具不提供 shell 或向量搜索；自动事件使用独立 SQLite 数据库和后台消费者。
 - Pending 使用与正式分类相同的文件大小和事务限制；不提供次数阈值、自动衰减、定时扫描或复杂置信度评分。成熟判断由 Agent 在对话中基于语义完成。
-- 对话超过约 250000 个序列化字符时停止，提示 `/clear`；不自动压缩或持久化。
+- 对话超过约 250000 个序列化字符时停止，提示 `/clear`；不自动压缩；事件会话的反馈历史持久化在 pending_events 中。
 - HTTP 超时或错误不自动重试；响应超过上限或模型输出截断时不执行该响应的工具调用。程序不自动跟随 HTTP 重定向。
-- Temporary 是所选 Memory 根目录内 Runtime 私有的 `.memory-temporary/` 完整工作副本；首次修改时标记事务开启。同一对话进程内跨轮保留；新进程启动总是执行 Formal → Temporary 完整同步。`.memory-*` 运行时目录与状态不进入 Agent 检索，并被 Git 忽略。
-- 提交前做全量 diff 与 Formal 基线校验；用户 yes 后执行 Temporary → Formal 完整同步。discard 与新进程启动均执行 Formal → Temporary 完整覆盖，不做局部删除或逐文件回滚。
-- 普通文件系统不能让多个 Markdown 对外部读取者瞬间一起切换；硬中断到重启之间，外部程序可能看到部分已同步内容。不承诺断电下的物理磁盘持久性或防御恶意本地进程。协作实例通过文件锁与状态校验阻止相互覆盖；过期实例需重新打开根目录。
+- Temporary 是所选 Memory 根目录内 Runtime 私有的 `.memory-temporary/` 完整工作副本；首次修改时才复制并开启事务。同一会话跨轮保留；新进程不会覆盖仍有有效持有者的 Temporary。`.memory-*` 运行时目录与状态不进入 Agent 检索，并被 Git 忽略。
+- 提交前做全量 diff 与 Formal 基线校验；用户 yes 后执行 Temporary → Formal 完整同步。discard 丢弃所属事务；提交使用备份和恢复标记，失败回滚，崩溃后在读取前恢复。
+- 普通文件系统不能让多个 Markdown 对外部读取者瞬间一起切换；硬中断到重启之间，外部程序可能看到部分已同步内容。不承诺断电下的物理磁盘持久性或防御恶意本地进程。协作实例通过文件锁与状态校验阻止相互覆盖；会话恢复执行时重新读取历史 Memory 检索结果。
 - 支持文件删除，不提供目录移动工具。根协议、根索引仍由人维护，原始邮件保持既有不可变归档流程。
 
 ## 邮件草稿编辑（第三阶段）
@@ -179,7 +179,7 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 
 ## 回归验证
 
-离线测试覆盖完整 Temporary 工作副本、Pending 可见与迁移、同进程跨轮保留、yes/no/discard、新会话基线重置、self 额外审阅、外部编辑冲突、邮件与聊天共享事务、注入审批边界，以及原有 MIME/草稿限制。
+离线测试覆盖完整 Temporary 工作副本、Pending 可见与迁移、同进程跨轮保留、yes/no/discard、新会话事务隔离与失效事务恢复、self 额外审阅、外部编辑冲突、邮件与聊天共享事务、注入审批边界，以及原有 MIME/草稿限制。
 
 ## Pending 流程
 
@@ -203,7 +203,7 @@ Agent 语义判断已经成熟
 python -m unittest discover -s tests -v
 ```
 
-手动验证可在副本上要求修改 project 和 self，先回答 `no`，继续反馈，再申请 commit；检查 Formal 只在用户确认且 self 审阅通过后改变。邮件导入建议直接在 `python -m agent.main --root memory` 中使用 `/email`，导入后未提交的 Temporary 仍在同一对话中继续修改；进程退出后不能续接，下一次启动会从 Formal 重新初始化。
+手动验证可在副本上要求修改 project 和 self，先回答 `no`，继续反馈，再申请 commit；检查 Formal 只在用户确认且 self 审阅通过后改变。邮件导入建议直接在 `python -m agent.main --root memory` 中使用 `/email`，导入后未提交的 Temporary 仍在同一对话中继续修改；进程退出会取消未提交事务，下一次会话读取正式 Memory。
 
 协议参考：[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)、[工具调用往返](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)。第三方网关的实际兼容性以实测为准。
 
@@ -313,4 +313,4 @@ python -m unittest discover -s tests
 
 ## 长期规则（第一阶段）
 
-通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则及新邮件并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。邮件规则首次成功同步建立基线，仅监控此后的新邮件。检查器不消费事件，消费者不自动启动，暂不接入 QQ 聊天消息、系统通知或开机自启。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，消费流程见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)，邮件来源及验收见 [AUTOMATIONS-V4.md](AUTOMATIONS-V4.md)。
+通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则及新邮件并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。邮件规则首次成功同步建立基线，仅监控此后的新邮件。检查器不消费事件；聊天空闲时消费者自动启动独立 Windows 事件终端，完成后保存完整结果并提交通知。不接入 QQ 聊天消息或开机自启。第五阶段用法与边界见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，消费流程见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)，邮件来源及验收见 [AUTOMATIONS-V4.md](AUTOMATIONS-V4.md)。

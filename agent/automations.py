@@ -10,7 +10,7 @@ from .automation_triggers import EVENT_VALIDATORS, nonempty, object_fields, sche
 from .llm import load_config
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data/automations.sqlite3"
-NOTICE = "规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，系统通知尚未接入。"
+NOTICE = "规则已保存；手动启动检查器可将定时事件和匹配的新邮件入队；/automation consume 可调用 Agent 并在终端展示，聊天程序空闲时会打开独立事件终端自动消费，完成后提交 Windows 通知；检查器仍须单独启动。"
 EDITABLE = ("name", "trigger_config", "content", "mode")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS automations (

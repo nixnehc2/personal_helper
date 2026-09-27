@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 import uuid
+import weakref
 from pathlib import Path
 
 PROTECTED_MEMORY_PATHS = ("self",)
@@ -47,15 +48,47 @@ class TransactionChange:
 
 class MemoryPolicy:
     def __init__(self, files, confirm_batch, confirm_transaction):
-        self.files = files
+        self.files = weakref.proxy(files)
         self.confirm_batch = confirm_batch
         self.confirm_transaction = confirm_transaction
         self.session = uuid.uuid4().hex
         self.snapshot = None
-        with self._lock():
-            self._preserve_legacy_email_archives()
-            self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
+        from .scheduler import OSLock, Scheduler
+        self.lease = OSLock(files.root / ".memory-owner.lock")
+        self.scheduler = Scheduler(self)
+        self.ensure_no_transaction()
+
+    def close(self):
+        if self.lease.stream is not None:
+            self.discard(explicit=True)
+
+    def _recover(self):
+        backup = self.files.root / ".memory-rollback"
+        journal = self.files.root / ".memory-commit.json"
+        if journal.exists():
+            self._sync_tree(backup, self.files.root, preserve_runtime=True)
+            journal.unlink()
+        if backup.exists():
+            shutil.rmtree(backup)
+
+    def _commit_tree(self):
+        backup = self.files.root / ".memory-rollback"
+        journal = self.files.root / ".memory-commit.json"
+        self._recover()
+        self._sync_tree(self.files.root, backup, preserve_runtime=False)
+        self._atomic_write(journal, b"{}")
+        try:
+            self._sync_tree(self.files.workspace_root, self.files.root, preserve_runtime=True)
             self._save(False)
+            journal.unlink()
+        except BaseException:
+            self._recover()
+            self._save(True, self._baseline())
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+
+    def _release(self):
+        self._save(False)
 
     def canonical(self, path):
         target = self.files.workspace_path(path)
@@ -84,26 +117,19 @@ class MemoryPolicy:
 
     @contextmanager
     def _lock(self):
-        path = self.files.formal_path(LOCK_NAME, internal=True)
-        with path.open("a+b") as stream:
-            if stream.tell() == 0:
-                stream.write(b"0")
-                stream.flush()
-            stream.seek(0)
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                yield
-            finally:
-                stream.seek(0)
-                if os.name == "nt":
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(stream, fcntl.LOCK_UN)
+        # Never take the short metadata lock before the retained owner lease.
+        from .scheduler import OSLock
+        if not self.lease.acquire():
+            raise ValueError("Memory transaction owned by another session: " + str(self._state()))
+        metadata = OSLock(self.files.formal_path(LOCK_NAME, internal=True))
+        try:
+            if not metadata.acquire():
+                raise ValueError("Memory metadata is busy")
+            yield
+        finally:
+            metadata.release()
+            if not self._active():
+                self.lease.release()
 
     def _state_bytes(self):
         path = self.files.formal_path(STATE_NAME, internal=True)
@@ -112,7 +138,7 @@ class MemoryPolicy:
     def _save(self, active, baseline=None):
         path = self.files.formal_path(STATE_NAME, internal=True)
         raw = json.dumps(dict(version=2, active=active, session=self.session,
-                              baseline=baseline or {}), ensure_ascii=False).encode("utf-8")
+                              pid=os.getpid(), baseline=baseline or {}), ensure_ascii=False).encode("utf-8")
         self._atomic_write(path, raw)
         self.snapshot = raw
 
@@ -126,8 +152,8 @@ class MemoryPolicy:
         return data
 
     def _check_snapshot(self):
-        if self._state_bytes() != self.snapshot:
-            raise ValueError("transaction changed in another session; reopen this memory root")
+        if self._active() and self._state_bytes() != self.snapshot:
+            raise ValueError("transaction changed in another session")
 
     def _active(self):
         state = self._state()
@@ -193,7 +219,7 @@ class MemoryPolicy:
                 self._safe_unlink(Path(target / entry.name))
         for folded, name in source_entries.items():
             source_item, target_item = Path(source / name), Path(target / name)
-            if source == self.files.root and target == self.files.workspace_root and name.startswith(".memory-"):
+            if source == self.files.root and name.startswith(".memory-"):
                 continue
             if preserve_runtime and target == self.files.root and name.startswith(".memory-"):
                 continue
@@ -256,14 +282,22 @@ class MemoryPolicy:
     @property
     def changes(self):
         self._check_snapshot()
-        return self._changes()
+        return self._changes() if self._active() else {}
 
     def _ensure_memory_transaction(self):
         self._check_snapshot()
         if self._active():
             return
-        self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
-        self._save(True, self._baseline())
+        if not self.lease.acquire():
+            raise ValueError("Memory transaction owned by another session: " + str(self._state()))
+        try:
+            self._recover()
+            self._preserve_legacy_email_archives()
+            self._sync_tree(self.files.root, self.files.root / TEMPORARY_NAME, preserve_runtime=False)
+            self._save(True, self._baseline())
+        except BaseException:
+            self.lease.release()
+            raise
 
     def _baseline(self):
         return {path: hashlib.sha256(path_item.read_bytes()).hexdigest()
@@ -274,11 +308,21 @@ class MemoryPolicy:
             self._ensure_memory_transaction()
 
     def ensure_no_transaction(self):
-        with self._lock():
-            self._check_snapshot()
-            if not self._active():
-                self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
+        if self.lease.stream is not None:
+            return
+        # Successful OS acquisition is the only authority for stale cleanup.
+        if not self.lease.acquire():
+            return
+        try:
+            with self._lock():
+                self._recover()
+                temporary = self.files.root / TEMPORARY_NAME
+                if temporary.exists():
+                    self._preserve_legacy_email_archives()
+                    shutil.rmtree(temporary)
                 self._save(False)
+        finally:
+            self.lease.release()
 
     def apply_memory_changes(self, changes):
         results = []
@@ -326,7 +370,7 @@ class MemoryPolicy:
     def show(self):
         self.ensure_no_transaction()
         self._check_snapshot()
-        changes = self._changes()
+        changes = self.changes
         state = self._state()
         baseline = state.get("baseline", {}) if state else {}
         formal = self._tree_files(self.files.root)
@@ -372,34 +416,36 @@ class MemoryPolicy:
                         raise ValueError(f"{path}: index references a missing file")
 
     def sync_formal_to_temporary(self):
-        with self._lock():
-            self._check_snapshot()
-            self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
-            self._save(False)
+        return self.discard(explicit=True)
 
     def sync_temporary_to_formal(self):
-        with self._lock():
-            self._check_snapshot()
-            self._sync_tree(self.files.workspace_root, self.files.root, preserve_runtime=True)
-            self._save(False)
+        return self.request_commit()
 
     def discard(self, explicit=False):
+        if not self._active():
+            return dict(status="no_changes")
         with self._lock():
+            if not self._active():
+                return dict(status="no_changes")
             self._check_snapshot()
             changes = self.changes
             if changes and not explicit and self.confirm_transaction("discard", list(changes.values())) != "yes":
                 return dict(status="not_approved", temporary_retained=True)
-            self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
-            self._save(False)
+            shutil.rmtree(self.files.root / TEMPORARY_NAME, ignore_errors=False)
+            self._release()
             return dict(status="discarded" if changes else "no_changes")
 
     def request_commit(self):
+        if not self._active():
+            return dict(status="no_changes")
         with self._lock():
+            self._recover()
             self._check_snapshot()
+            if not self._active():
+                return dict(status="no_changes")
             changes = self._changes()
             if not changes:
-                self._sync_tree(self.files.root, self.files.workspace_root, preserve_runtime=False)
-                self._save(False)
+                self._release()
                 return dict(status="no_changes")
             self._validate(changes)
             if self.confirm_transaction("commit", list(changes.values())) != "yes":
@@ -422,8 +468,7 @@ class MemoryPolicy:
                     return dict(status="self_review_not_approved", temporary_retained=True)
             changes = self._changes()
             self._validate(changes)
-            self._sync_tree(self.files.workspace_root, self.files.root, preserve_runtime=True)
-            self._save(False)
+            self._commit_tree()
             self.files.writes.extend(change.path for change in changes.values())
             return dict(status="committed", paths=[change.path for change in changes.values()])
 
@@ -433,14 +478,14 @@ class MemoryPolicy:
         Only content-addressed EMLs are migrated; derived Memory still requires
         review and follows the existing startup reset behavior.
         """
-        directory = self.files.workspace_path("inbox/email")
+        directory = self.files.root / TEMPORARY_NAME / "inbox/email"
         if not directory.is_dir():
             return
         for item in directory.glob("*.eml"):
             if not re.fullmatch(r"[0-9a-f]{64}\.eml", item.name):
                 continue
             relative = f"inbox/email/{item.name}"
-            raw = self.files.workspace_path(relative).read_bytes()
+            raw = (self.files.root / TEMPORARY_NAME / relative).read_bytes()
             if hashlib.sha256(raw).hexdigest() != item.stem:
                 raise ValueError("legacy raw archive hash mismatch; original Temporary retained")
             formal = self.files.formal_path(relative)
@@ -457,6 +502,11 @@ class MemoryPolicy:
         formal = self.files.formal_path(path)
         with self._lock():
             self._check_snapshot()
+            if not self._active():
+                self._ensure_memory_transaction()
+                archive_only = True
+            else:
+                archive_only = False
             target = self.files.workspace_path(path)
             duplicate = formal.exists() or target.exists()
             if (formal.exists() and formal.read_bytes() != raw) or (target.exists() and target.read_bytes() != raw):
@@ -474,6 +524,8 @@ class MemoryPolicy:
                 if path not in baseline:
                     baseline[path] = digest
                     self._save(True, baseline)
+            if archive_only:
+                self._release()
             return dict(path=path, duplicate=duplicate)
 
 
