@@ -12,6 +12,7 @@ import uuid
 from .llm import Client, load_config
 from .tools import FileTools, TOOLS
 from .debug_logger import agent_debug
+from .messages.processing import MESSAGE_RULES
 
 BOOTSTRAP = """You are a personal knowledge-base agent.
 长期提醒和监控请求必须使用 automation 工具保存，不写入 Memory，不生成或执行 SQL。
@@ -219,14 +220,18 @@ def confirm_batch(changes):
 
 def run_turn(client, files, messages, user, emit=print, max_steps=20, extra_system="", emit_final=True,
              trigger_type="user", session_id=None, automation_meta=None):
-    # Tool-triggered ingestion uses its own transcript: the outer transcript has
-    # an outstanding tool_use and cannot be sent to the model until it is answered.
-    # It still shares the same client, FileTools and Temporary transaction.
+    # A selected import shares this turn and its normal tool registry.
+    from .messages.importing import import_session
     _sid = session_id or getattr(files.policy, "session", None) or "unknown"
     with agent_debug.run(_sid, trigger_type, automation_meta=automation_meta,
                          initial_context={"user_input": user, "extra_system": extra_system}):
-        with files.policy.scheduler.turn(emit), files.message_context(client, emit=emit):
-            return _run_turn(client, files, messages, user, emit, max_steps, extra_system, emit_final)
+        with files.policy.scheduler.turn(emit), files.message_context(client, emit=emit), import_session(files) as imports:
+            result = _run_turn(client, files, messages, user, emit, max_steps, extra_system, emit_final)
+        if imports.pending:
+            result["message_imports"] = [dict(id=message.id, source=message.source,
+                                              status=state["status"], imported=state["imported"])
+                                         for _, message, state in imports.pending.values()]
+        return result
             
 def refresh_memory_evidence(files, messages):
     """Re-read past retrievals under turn admission, preserving conversation text."""
@@ -293,7 +298,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
     root_index = files.text(root_index_path) if root_index_path.is_file() else ""
     self_index_path = files.path("self/_INDEX.md")
     self_index = files.text(self_index_path) if self_index_path.is_file() else ""
-    system = (BOOTSTRAP
+    system = (BOOTSTRAP + "\n" + MESSAGE_RULES
               + "\nKnowledge-base protocol (AGENT.md):\n" + protocol
               + "\nKnowledge-base root index (_INDEX.md):\n" + root_index
               + "\n" + extra_system)

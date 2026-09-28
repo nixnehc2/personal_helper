@@ -1,5 +1,7 @@
 # 第三阶段：统一 Message 查询与选择导入
 
+> 当前导入行为已由 [General Import Agent](GENERAL-IMPORT.md) 更新（2026-09-29）：完整正常工具、单条外部消息、本轮处理完成即 imported=true，不再等待 Memory commit。本文查询/分页说明仍有效，下方旧导入实现与状态表作为历史记录。
+
 ## 用法
 
 在已有 QQ 同步和 Email 索引基础上：
@@ -25,7 +27,7 @@
 
 QQ 摘要包含 Message ID、时间、会话名称及 ID、发送者名称及 QQ、文字预览、imported。完整查看和导入都保留完整文字及空格/换行。Email 摘要保留主题、发件人及文件夹。
 
-## 链路梳理与抽取
+## 历史：链路梳理与抽取
 
 原有 Email 链路：EmailIndex 行 → Email Adapter → Message → 用户选择 ID → 下载/缓存 EML → MIME 解析及原文归档 → `run_turn()` → Temporary Memory → review。此前最后的 imported 标记只检查模型正常结束，可能早于 Memory 提交。
 
@@ -48,7 +50,7 @@ Email 的 `process_eml()` 保留为来源准备入口，并调用公共 `process
 
 QQ 导入输入包含来源、时间、会话、发送者和完整文字，不包含 checkpoint、账号存储字段或 ID 哈希实现。它使用同一个 `run_turn()` 和 FileTools，不建立 QQ 专用 Agent。来源内容均标记为不可信数据，不能当作授权、工具指令或用户本人的写作证据。
 
-## imported 与 Memory 的统一边界
+## 历史：imported 与 Memory 的统一边界（已替换）
 
 | 情况 | 结果 |
 | --- | --- |

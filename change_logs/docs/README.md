@@ -88,11 +88,11 @@ python -m agent.email_index
 
 `/email <path>` 也通过注册的 `email` Tool 调用同一个 `process_eml()`。Agent 自主调用本地 `email` Tool 时路径仍限于 Memory 根目录；只有用户显式 `/email` 命令可授权读取所指定的外部 `.eml` 文件。原有 `ingest_email()` 保留为兼容转发，原本地 EML CLI 继续可用。MIME 解析、Agent、Temporary Memory 和 review 使用原有流程。Agent 在工具调用中触发 EML 处理时使用独立消息列表，避免向模型发送尚未配对的 tool_use；客户端、Memory 工具和 Temporary Transaction 仍是同一份。处理邮件期间禁止再次调用导入工具，避免递归导入。
 
-`process_eml()` 正常完成且没有工具错误/Memory 冲突后，若无待提交修改即可写入 `imported=true` 和 UTC `imported_at`；若仍有 Temporary 修改则返回 `pending_review`，等待用户正式提交后再写入。仅下载成功、原文已归档、模型/Memory/索引写入失败均不算成功，保持未导入；失败后再次使用同一命令会复用可信 EML，并重新完成处理，不因原文已归档而跳过。处理过程中出现过工具错误时保守地视为失败，即使模型随后结束回答也不标记成功。
+当前 `/import_email` 与 `/import_message email` 统一进入 [General Import Agent](GENERAL-IMPORT.md)：单条 Message → 正常 Agent，使用完整正常工具；不要求修改 Memory。Agent 工具入口只返回当前消息，不递归启动 Agent。正文继续缓存于 `data/email/raw`，General Import 不再隐式归档到 Memory。
 
-原始 EML 在处理开始时立即归档至 `memory/inbox/email/<sha256>.eml`，并同步到 Temporary 的镜像；它是源文件留存，不是 Agent 的记忆修改，不计入待审文件数、不展示 diff、不要求用户确认。只有派生记忆才进入 Temporary review。仅归档原文的邮件不会提示“Temporary 保留 1 个文件”。拒绝提交、取消 Temporary 或重启均保留原文，模型失败也不会删除已归档原文。启动时会保留旧版仅存于 Temporary 中且 SHA-256 文件名校验通过的 EML；这不提交旧的派生记忆。
+`imported=true` 表示 Agent 本轮已正常处理，与 Memory 审阅独立：no 保留 Temporary、cancel 丢弃 Temporary，均不撤销已完成处理。模型/API/工具执行失败不标记；重复处理默认跳过。其他副作用与 imported 不是原子事务，失败重试前应检查是否已经生成提醒、文件或提交 Memory。
 
-**第三阶段起 Email 与 QQ 共用完成语义：有派生修改时，正式提交后才 imported=true。** 用户 review 回答 `no` 时 Temporary 保留、imported=false；后续提交才标记，取消或退出不标记。旧版已标记的历史记录不自动重置。索引与 Memory 不是跨文件事务：如果 Memory 处理成功后索引写入失败，索引保持未导入并报错，重试会再次处理原文。现有 `/email --force/--reprocess` 兼容行为只属于本地 EML 路径，不是 `import_email` 的参数。
+本地 `/email <path>` 保留旧 EML 专用流程，包括 `memory/inbox/email/<sha256>.eml` 原文归档和派生 Memory 审阅；这不是 General Import 的 Email 索引入口。`--force/--reprocess` 只属于本地 EML 路径。
 
 本阶段没有新增自动导入或自动回复功能。测试使用模拟 IMAP、SMTP 和模型及临时目录，不导入真实个人邮件。
 
@@ -333,7 +333,7 @@ python -m unittest discover -s tests
 
 ## 第三阶段：统一 Message 查询、查看与选择导入
 
-详见 [统一 Message 流程与状态说明](MESSAGE-V3.md)。QQ 与 Email 共用以下命令：
+查询与分页见 [统一 Message 说明](MESSAGE-V3.md)，当前导入调用链和完成语义见 [General Import Agent](GENERAL-IMPORT.md)。QQ 与 Email 共用以下命令：
 
 ```text
 /list_messages

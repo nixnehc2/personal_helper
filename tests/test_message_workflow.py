@@ -99,47 +99,45 @@ class UnifiedMessageTests(unittest.TestCase):
         self.assertFalse(self.files.policy.changes)
 
     def test_formatter_and_real_run_turn_and_repeat(self):
-        client=ScriptClient([])
-        client.complete=Mock(wraps=client.complete)
-        result=self.execute(client)
-        self.assertTrue(result['imported'])
+        client=ScriptClient([]); client.complete=Mock(wraps=client.complete)
+        self.assertTrue(self.execute(client)['imported'])
         system, transcript, tools=client.complete.call_args.args
-        content=transcript[0]['content']
-        for value in ('来源：QQ','2026-09-28T08:00:00+08:00','测试群','小明',message(1).content['text']):
-            self.assertIn(value,content)
-        self.assertNotIn('checkpoint',content)
-        self.assertNotIn('account_id',content)
+        payload=json.loads(transcript[0]['content'].split('\n',1)[1])
+        self.assertEqual(payload['kind'],'External Message')
+        self.assertEqual(payload['external_message']['content'],message(1).content)
+        self.assertEqual(payload['external_message']['time'],message(1).time)
         self.assertIn('untrusted',system)
-        self.assertNotIn('import_message',{s['name'] for s in tools})
+        from agent.tools import TOOLS
+        self.assertEqual(tools,TOOLS)
         broken=Mock(complete=Mock(side_effect=AssertionError('must not run')))
         self.assertEqual(self.execute(broken)['status'],'already_imported')
 
-    def test_pending_then_commit_marks_only_selected(self):
+    def test_pending_memory_does_not_delay_processing(self):
         self.save(message(2))
         result=self.execute(ScriptClient([[create('projects/a.md','candidate')]]))
-        self.assertEqual(result['status'],'pending_review')
-        self.assertFalse(self.store.get(1).imported)
-        self.assertEqual(self.execute()['status'],'pending_review')
-        committed=self.files.policy.request_commit()
-        self.assertEqual(committed['status'],'committed')
-        self.assertTrue(committed['message_imports'][0]['imported'])
+        self.assertEqual(result['status'],'processed')
         self.assertTrue(self.store.get(1).imported)
+        self.assertEqual(self.execute()['status'],'already_imported')
+        self.assertFalse((self.root/'projects/a.md').exists())
+        self.assertEqual(self.files.policy.request_commit()['status'],'committed')
         self.assertFalse(self.store.get(2).imported)
         self.assertFalse((self.store.path.parent/'imports/1.lock').exists())
 
-    def test_review_no_and_later_cancel_remains_false(self):
+    def test_review_no_and_later_cancel_preserve_processed(self):
         self.files.policy.confirm_transaction=lambda *args:'no'
         result=self.execute(ScriptClient([[create('projects/a.md','candidate')],[('commit_memory_changes',{})]]))
-        self.assertEqual(result['status'],'pending_review')
+        self.assertEqual(result['status'],'processed')
+        self.assertTrue(self.files.policy.changes)
+        self.assertFalse((self.root/'projects/a.md').exists())
         run_turn(ScriptClient([]),self.files,[],'/cancel',emit=lambda _:None)
-        self.assertFalse(self.store.get(1).imported)
+        self.assertTrue(self.store.get(1).imported)
         self.assertEqual(self.files.policy.completion_callbacks,{})
-        self.assertTrue(self.execute()['imported'])
 
-    def test_discard_inside_import_is_not_success(self):
+    def test_discard_inside_import_is_normal_completion(self):
         result=self.execute(ScriptClient([[create('projects/a.md','candidate')],[('discard_memory_changes',{})]]))
-        self.assertEqual(result['status'],'discarded')
-        self.assertFalse(self.store.get(1).imported)
+        self.assertEqual(result['status'],'processed')
+        self.assertTrue(self.store.get(1).imported)
+        self.assertFalse(self.files.policy.changes)
 
     def test_commit_inside_import(self):
         result=self.execute(ScriptClient([[create('projects/a.md','candidate')],[('commit_memory_changes',{})]]))
@@ -164,70 +162,70 @@ class UnifiedMessageTests(unittest.TestCase):
         self.assertTrue((self.root/'projects/a.md').exists())
         self.assertFalse(self.store.get(1).imported)
 
-    def test_commit_failure_retains_pending(self):
+    def test_later_commit_failure_does_not_undo_processed(self):
         self.execute(ScriptClient([[create('projects/a.md','candidate')]]))
         with patch.object(self.files.policy,'_commit_tree',side_effect=OSError('disk full')):
-            result=self.files.execute('commit_memory_changes',{})
-        self.assertIn('error',result)
-        self.assertFalse(self.store.get(1).imported)
+            self.assertIn('error',self.files.execute('commit_memory_changes',{}))
         self.files.policy.discard(explicit=True)
-        self.assertFalse(self.store.get(1).imported)
+        self.assertTrue(self.store.get(1).imported)
 
     def test_imported_write_failure_reports_without_undoing_commit(self):
-        self.execute(ScriptClient([[create('projects/a.md','candidate')]]))
         with patch.object(QQStore,'mark_imported',side_effect=OSError('disk full')):
-            result=self.files.policy.request_commit()
-        self.assertEqual(result['status'],'committed')
-        self.assertIn('error',result['message_imports'][0])
+            result=self.execute(ScriptClient([[create('projects/a.md','candidate')],[('commit_memory_changes',{})]]))
+        self.assertIn('error',result)
+        self.assertTrue((self.root/'projects/a.md').exists())
         self.assertFalse(self.store.get(1).imported)
         self.assertFalse((self.store.path.parent/'imports/1.lock').exists())
 
     def test_self_review_rejection_and_close(self):
         self.files.policy.confirm_batch=lambda changes:{}
         result=self.execute(ScriptClient([[create('self/a.md','candidate')],[('commit_memory_changes',{})]]))
-        self.assertEqual(result['status'],'pending_review')
+        self.assertEqual(result['status'],'processed')
+        self.assertFalse((self.root/'self/a.md').exists())
         self.files.policy.close()
-        self.assertFalse(self.store.get(1).imported)
-        self.assertFalse((self.store.path.parent/'imports/1.lock').exists())
+        self.assertTrue(self.store.get(1).imported)
 
-    def test_identity_change_before_commit_rejected(self):
-        self.execute(ScriptClient([[create('projects/a.md','candidate')]]))
-        changed=message(1); changed.content['text']='changed'; self.save(changed)
-        result=self.files.policy.request_commit()
-        self.assertIn('error',result['message_imports'][0])
+    def test_identity_change_before_turn_completion_rejected(self):
+        def change(*args):
+            changed=message(1); changed.content['text']='changed'; self.save(changed)
+            return dict(content=[dict(type='text',text='done')],stop_reason='end_turn')
+        self.assertIn('error',self.execute(Mock(complete=change)))
         self.assertFalse(self.store.get(1).imported)
 
-    def test_multiple_pending_imports_share_final_commit(self):
+    def test_multiple_completed_imports_share_memory_transaction(self):
         self.save(message(2))
         for id in (1,2):
-            self.assertEqual(self.execute(ScriptClient([[create(f'projects/{id}.md','candidate')]]),id=id)['status'],'pending_review')
-        self.assertEqual(len(self.files.policy.request_commit()['message_imports']),2)
+            self.assertEqual(self.execute(ScriptClient([[create(f'projects/{id}.md','candidate')]]),id=id)['status'],'processed')
         self.assertTrue(all(m.imported for m in self.store.list()))
+        self.assertEqual(len(self.files.policy.changes),2)
+        self.assertEqual(self.files.policy.request_commit()['status'],'committed')
 
-    def test_pending_lock_blocks_other_memory_session(self):
-        self.execute(ScriptClient([[create('projects/a.md','candidate')]]))
+    def test_active_turn_lock_blocks_other_memory_session(self):
         other=self.base/'other'; other.mkdir(); (other/'AGENT.md').write_text('Test')
         files=FileTools(other,lambda c:{},lambda *a:'yes')
-        try:
-            with self.assertRaisesRegex(ValueError,'正在导入'):
+        def check(*args):
+            from contextlib import nullcontext
+            with patch.object(files.policy.scheduler,'turn',return_value=nullcontext()), self.assertRaisesRegex(ValueError,'正在导入'):
                 import_message(1,ScriptClient([]),files,source='qq',emit=lambda _:None)
+            return dict(content=[dict(type='text',text='done')],stop_reason='end_turn')
+        try: self.assertTrue(self.execute(Mock(complete=check))['imported'])
         finally: files.policy.close()
 
-    def test_recursive_import_and_sync_rejected(self):
-        for tool,args in (('import_message',dict(id=1,source='qq')),('update_qq',{})):
-            self.assertIn('error',self.execute(ScriptClient([[(tool,args)]])))
-            self.assertFalse(self.store.get(1).imported)
+    def test_same_message_tool_returns_processing_without_recursion(self):
+        client=ScriptClient([[('import_message',dict(id=1,source='qq'))]])
+        self.assertTrue(self.execute(client)['imported'])
+        self.assertEqual(json.loads(client.tool_results[0]['content'])['status'],'processing')
 
     def test_source_registry_extension_uses_same_import_coordinator(self):
         item=Message(99,'fake',None,False,{'text':'test'})
-        backend=Mock(get=Mock(return_value=item),process=Mock(return_value={'status':'processed'}),
+        backend=Mock(get=Mock(return_value=item),import_content=Mock(return_value={'text':'test'}),
                      mark_imported=Mock(return_value={'imported':True}))
         from contextlib import nullcontext
         backend.lock=Mock(return_value=nullcontext())
         with patch.dict(SOURCES,{'fake':lambda:backend}):
             result=import_message(99,ScriptClient([]),self.files,source='fake',emit=lambda _:None)
         self.assertTrue(result['imported'])
-        backend.process.assert_called_once()
+        backend.import_content.assert_called_once_with(item)
         backend.mark_imported.assert_called_once_with(item)
 
     def test_cli_parsing_and_actual_chat(self):
@@ -243,21 +241,17 @@ class UnifiedMessageTests(unittest.TestCase):
         self.assertIn('processed',output.getvalue())
         self.assertTrue(self.store.get(1).imported)
 
-    def test_agent_tool_nested_transcript_is_valid(self):
+    def test_agent_tool_continues_existing_transcript(self):
         calls=[]
         class Client:
             def complete(inner,system,messages,tools):
-                if 'user-selected message import task' in system:
-                    self.assertIsInstance(messages[0]['content'],str)
-                    calls.append('inner')
-                    return dict(content=[dict(type='text',text='done')],stop_reason='end_turn')
                 if not calls:
                     calls.append('outer')
                     return dict(content=[dict(type='tool_use',id='select',name='import_message',input=dict(source='qq',id=1))],stop_reason='tool_use')
                 self.assertEqual(messages[-1]['content'][0]['tool_use_id'],'select')
                 return dict(content=[dict(type='text',text='done')],stop_reason='end_turn')
         run_turn(Client(),self.files,[],'导入 QQ Message 1',emit=lambda _:None)
-        self.assertEqual(calls,['outer','inner'])
+        self.assertEqual(calls,['outer'])
         self.assertTrue(self.store.get(1).imported)
 
 

@@ -56,11 +56,10 @@ class EmailSource:
         from agent.email_parser import parse_bytes, read_raw_email
         return view_email(parse_bytes(read_raw_email(self.original(message))))
 
-    def process(self, message, client, files, **kwargs):
-        # Keep the legacy EML API; its Agent/Temporary steps use shared process_input.
-        from agent.email_workflow import process_eml
-        path = self.original(message)
-        return dict(process_eml(path, client, files, reprocess=True, **kwargs), eml_path=str(path))
+    def import_content(self, message):
+        from agent.email_parser import parse_bytes, read_raw_email
+        parsed = parse_bytes(read_raw_email(self.original(message)))
+        return dict(message.content, email=parsed.model_data())
 
     def mark_imported(self, message):
         row = self.store.mark_imported(email_identity(message))
@@ -106,9 +105,9 @@ class QQSource:
         from .locking import import_lock
         return import_lock(self.store.path.parent / "imports", id)
 
-    def process(self, message, client, files, **kwargs):
-        from .processing import MESSAGE_RULES, process_input
-        return process_input(format_qq(message), MESSAGE_RULES, client, files, **kwargs)
+    @staticmethod
+    def import_content(message):
+        return dict(message.content)
 
     def mark_imported(self, message):
         self.store.mark_imported(message)
