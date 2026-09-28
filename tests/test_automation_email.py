@@ -37,7 +37,7 @@ class EmailAutomationTests(unittest.TestCase):
     def create(self, match=None, mode="continuous"):
         rule = fixtures.mail()
         rule["mode"] = mode
-        rule["trigger_config"]["match"] = match or dict(from_addresses=["teacher@example.com"])
+        rule["trigger_config"]["match"] = dict(from_addresses=["teacher@example.com"]) if match is None else match
         rule["trigger_config"]["check_interval_seconds"] = 10
         return self.store.manage("create", rule=rule)["rule"]["id"]
 
@@ -74,6 +74,17 @@ class EmailAutomationTests(unittest.TestCase):
         self.assertEqual(self.check(20)["enqueued"], [])
         self.assertEqual(self.check(21)["enqueued"], [])
         self.assertEqual(self.connection.call_count, 3)
+
+    def test_empty_match_matches_all_emails(self):
+        self.create(match=dict())
+        self.check()
+        self.add(1, sender="anyone@example.com", subject="random")
+        self.add(2, sender="other@example.com", subject="anything")
+        self.add(3, sender="third@example.com", subject="news")
+        result = self.check(10)
+        self.assertEqual(len(result["enqueued"]), 3)
+        ids = [e["data"]["email"]["id"] for e in self.row()["pending_events"]]
+        self.assertEqual(ids, [1, 2, 3])
 
     def test_header_reply_matching_and_all_conditions(self):
         self.create(dict(from_addresses=["TEACHER@example.com"], subject_contains="application", reply_to_message_id="<original@test>"))

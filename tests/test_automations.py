@@ -118,7 +118,7 @@ class AutomationsTests(unittest.TestCase):
         self.assertEqual(changed["rule"]["mode"], "once")
 
     def test_email_validation_no_network(self):
-        for key, value in (("match", {}), ("match", {"from_addresses": ["bad"]}),
+        for key, value in (("match", {"from_addresses": ["bad"]}),
                            ("scope", {"account_id": "other@example.com", "folder": "INBOX"}),
                            ("check_interval_seconds", 0), ("match", {"unknown": "x"})):
             rule = mail()

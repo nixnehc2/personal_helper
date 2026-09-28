@@ -120,8 +120,6 @@ def email(config, settings):
         raise ValueError("account_id 不对应本地 EMAIL_ACCOUNT 配置")
     nonempty(scope["folder"], "folder")
     object_fields(match, ("from_addresses", "subject_contains", "reply_to_message_id"))
-    if not match:
-        raise ValueError("邮件规则至少需要一个匹配条件")
     for key, value in match.items():
         if key == "from_addresses":
             if not isinstance(value, list) or not value:
