@@ -1,28 +1,75 @@
-"""Pure NapCat text adapter; unsupported segments are skipped as a whole."""
+"""Extract readable QQ text without expanding media, cards or reply targets."""
+from copy import deepcopy
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from .models import Message
 
 
+_CQ_SEGMENT = re.compile(r"\[CQ:([A-Za-z0-9_]+)(?:,([^\[\]]*))?\]")
+
+
+def _unescape(text):
+    # Decode once, after recognizing CQ syntax. Escaped CQ-looking text is literal.
+    return text.replace("&#91;", "[").replace("&#93;", "]").replace("&amp;", "&")
+
+
+def _segment_id(data, key):
+    value = data.get(key)
+    if type(value) not in (str, int) or not str(value).strip():
+        raise ValueError(f"QQ segment 必须包含有效 {key}")
+    return str(value)
+
+
+def segment_to_text(segment):
+    if (not isinstance(segment, dict) or not isinstance(segment.get("type"), str)
+            or not segment["type"] or not isinstance(segment.get("data"), dict)):
+        raise ValueError("QQ segment 必须包含字符串 type 和对象 data")
+    kind, data = segment["type"], segment["data"]
+    if kind == "text":
+        text = data.get("text")
+        if not isinstance(text, str):
+            raise ValueError("QQ text segment 必须包含字符串 text")
+        return text
+    if kind == "at":
+        target = _segment_id(data, "qq")
+        return "@全体成员" if target == "all" else "@" + target
+    if kind == "reply":
+        return f"[回复:{_segment_id(data, 'id')}]"
+    # Unknown but structurally valid segments are also ignored, not errors.
+    return ""
+
+
+def _cq_to_text(message):
+    parts, end = [], 0
+    for match in _CQ_SEGMENT.finditer(message):
+        parts.append(_unescape(message[end:match.start()]))
+        kind = match[1]
+        if kind in ("at", "reply"):
+            data = {}
+            for field in (match[2] or "").split(","):
+                key, separator, value = field.partition("=")
+                if separator:
+                    data[key] = _unescape(value.replace("&#44;", ","))
+            parts.append(segment_to_text(dict(type=kind, data=data)))
+        end = match.end()
+    parts.append(_unescape(message[end:]))
+    return "".join(parts)
+
+
 def qq_to_message(raw, conversation, account_id):
+    if not isinstance(raw, dict):
+        raise ValueError("QQ 消息必须是对象")
     segments = raw.get("message")
     if isinstance(segments, str):
-        # OneBot string format uses CQ escaping, unlike array text segments.
-        if "[CQ:" in segments or not segments:
-            return None
-        text = segments.replace("&#91;", "[").replace("&#93;", "]").replace("&amp;", "&")
-    elif isinstance(segments, list) and segments:
-        if any(not isinstance(s, dict) or s.get("type") != "text" for s in segments):
-            return None
-        parts = [s["data"]["text"] for s in segments]
-        if any(not isinstance(p, str) for p in parts):
-            raise ValueError("QQ text segment 必须包含字符串 text")
-        text = "".join(parts)
-        if not text:
-            return None
+        text = _cq_to_text(segments)
+    elif isinstance(segments, list):
+        text = "".join(segment_to_text(segment) for segment in segments)
     else:
+        raise ValueError("QQ message 必须是 segment 数组或 CQ 字符串")
+    if not text:
         return None
     kind, peer = conversation["type"], str(conversation["id"])
     if kind not in ("private", "group"):
@@ -42,7 +89,7 @@ def qq_to_message(raw, conversation, account_id):
     stable_id = int.from_bytes(hashlib.sha256(identity.encode()).digest(), "big")
     timestamp = datetime.fromtimestamp(float(raw["time"]), timezone.utc).isoformat()
     return Message(stable_id, "qq", timestamp, False, {
-        "text": text, "sender": dict(sender),
+        "text": text, "segments": deepcopy(segments), "sender": dict(sender),
         "conversation": {"type": kind, "id": peer, "name": conversation.get("name", "")},
         "account_id": str(account_id), "message_id": original_id,
     })

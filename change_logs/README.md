@@ -6,6 +6,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [QQ 可读消息](docs/QQ-READABLE-MESSAGES.md) | text/@/reply、混合消息、CQ 与原始 segments |
 | [QQ 周期同步与白名单](docs/QQ-STARTUP-SYNC.md) | 稳定会话身份、持久化周期、重试与手动同步 |
 | [General Import Agent](docs/GENERAL-IMPORT.md) | 单条外部消息进入正常 Agent、共享工具与处理状态 |
 | [完整使用说明](docs/README.md) | 启动、配置、Memory、文件读写、Email、Automation、QQ |
@@ -24,6 +25,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-29 | [03：QQ 混合消息可读内容适配](2026-09-29-03-qq-readable-segments.md) |
 | 2026-09-29 | [02：General Import Agent](2026-09-29-02-general-import-agent.md) |
 | 2026-09-29 | [01：QQ 持久化周期同步](2026-09-29-01-qq-persistent-sync-schedule.md) |
 | 2026-09-28 | [08：QQ 稳定身份白名单与启动同步](2026-09-28-08-qq-startup-whitelist.md) |

@@ -95,7 +95,8 @@ class QQSyncProgress:
     @staticmethod
     def _counts(counts):
         return " | ".join(f"{label} {counts[key]}" for label, key in (
-            ("扫描", "scanned"), ("新增", "added"), ("重复", "duplicates"), ("跳过", "skipped"), ("失败", "failed")))
+            ("扫描", "scanned"), ("可读消息", "text"), ("新增", "added"),
+            ("重复", "duplicates"), ("无文字内容跳过", "skipped"), ("失败", "failed")))
 
     def _frame(self, state):
         total, done = state["total_conversations"], state["completed_conversations"]

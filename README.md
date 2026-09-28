@@ -1,6 +1,6 @@
 # Personal AI Helper
 
-Python 命令行个人助手，支持 Memory、Email、Automation 和 QQ 纯文字消息同步。
+Python 命令行个人助手，支持 Memory、Email、Automation 和 QQ 可读消息同步。
 
 - [完整使用说明](change_logs/docs/README.md)
 - [说明文档与修改日志索引](change_logs/README.md)

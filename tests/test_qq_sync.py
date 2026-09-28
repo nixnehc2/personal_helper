@@ -54,11 +54,11 @@ class QQTests(unittest.TestCase):
         self.assertEqual(outgoing.content['conversation']['id'], '20')
         self.assertEqual(set(vars(a)), {'id','source','time','imported','content'})
     def test_nontext_and_mixed(self):
-        for kind in ('image','file','record','video','face','json','forward','at','reply'):
+        for kind in ('image','file','record','video','face','mface','json','share','forward','unknown'):
             item = raw(1, kind)
             self.assertIsNone(qq_to_message(item,self.conv,10))
             item['message'].append(dict(type='text',data=dict(text='hello')))
-            self.assertIsNone(qq_to_message(item,self.conv,10))
+            self.assertEqual(qq_to_message(item,self.conv,10).content['text'], 'hello')
         client = Client([raw(i, kind) for i, kind in enumerate(('image','file','record','video'))])
         result = self.sync(client)
         self.assertEqual((result['added'], result['skipped'], result['failed']), (0,4,0))
@@ -138,7 +138,7 @@ class QQTests(unittest.TestCase):
         with patch.object(client,'_request',return_value={}):
             with self.assertRaises(QQClientError): client.get_history_page('group',20)
     def test_cq_string_and_array_literal(self):
-        self.assertIsNone(qq_to_message(raw(1,message='hi[CQ:image,file=x]'),self.conv,10))
+        self.assertEqual(qq_to_message(raw(1,message='hi[CQ:image,file=x]'),self.conv,10).content['text'], 'hi')
         self.assertEqual(qq_to_message(raw(1,message='&#91;CQ:test&#93;&amp;'),self.conv,10).content['text'],'[CQ:test]&')
 
 

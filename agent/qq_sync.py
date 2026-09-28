@@ -243,7 +243,7 @@ def update_qq(config=None, db_path=None, client=None, page_size=100, progress=No
             result["failed"] += 1
             result["errors"].append(f"QQ 同步时间保存失败: {exc}")
     result["display"] = ("QQ 同步完成" if not result["failed"] else "QQ 同步完成（存在失败，请重试）") + "\n" + "\n".join(
-        f"{label}：{result[key]}" for label, key in (("扫描", "scanned"), ("纯文字", "text"),
-        ("新增", "added"), ("重复", "duplicates"), ("跳过非文字", "skipped"), ("失败", "failed")))
+        f"{label}：{result[key]}" for label, key in (("扫描", "scanned"), ("可读消息", "text"),
+        ("新增", "added"), ("重复", "duplicates"), ("无文字内容跳过", "skipped"), ("失败", "failed")))
     report("finish")
     return result

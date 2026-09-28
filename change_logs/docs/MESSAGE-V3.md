@@ -1,6 +1,6 @@
 # 第三阶段：统一 Message 查询与选择导入
 
-> 当前导入行为已由 [General Import Agent](GENERAL-IMPORT.md) 更新（2026-09-29）：完整正常工具、单条外部消息、本轮处理完成即 imported=true，不再等待 Memory commit。本文查询/分页说明仍有效，下方旧导入实现与状态表作为历史记录。
+> 当前导入行为已由 [General Import Agent](GENERAL-IMPORT.md) 更新（2026-09-29）：完整正常工具、单条外部消息、本轮处理完成即 imported=true，不再等待 Memory commit。QQ 文字提取范围已扩展，见 [QQ 可读消息](QQ-READABLE-MESSAGES.md)。本文查询/分页说明仍有效，下方旧导入实现与状态表作为历史记录。
 
 ## 用法
 
