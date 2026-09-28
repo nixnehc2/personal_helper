@@ -83,3 +83,18 @@ QQ 继续使用 `data/qq/messages.sqlite3`；Email 使用独立的 `data/email/i
 完整正整数 ID 保持不变，SQL 使用十进制文本长度与字典序实现精确 ID 排序；时间标量函数只规范化日期字段，保留时区及微秒语义，不解析整条消息。跨来源时间和 ID 均相同的新情况按 source 名称升序稳定排列。未增加搜索索引，因此 SQLite 仍可能扫描、排序匹配记录，深 offset 也有扫描成本；本次保证限制消息载入量，不承诺查询耗时与总量无关。
 
 Email 同步与单条读取保留原快照接口；这次没有改变 `read_message` 的 ID 查找方式，也没有优化同步或单条读取的全量快照行为。邮件草稿仍保存为原来的 JSON 文件。
+
+
+## Message 通用关键词搜索 V1
+
+`search_messages(query, source=None)` 搜索存储 payload 的所有非 null 叶子值及统一 projection 的 id/source/stamp/imported，不搜索 JSON key。无需维护字段名单；新来源复用 registry 的 listing projection 即可。数字按 SQLite 文本形式，布尔按 true/false 搜索。空白关键词拒绝，其他关键词保留原样。
+
+```text
+/search_messages MaxRL
+/search_messages --source qq "MaxRL paper"
+/search_messages --source email 作业
+```
+
+source 省略查询所有来源；只读返回摘要，按标准化 UTC 时间倒序，最多 100 条。内部 SQL LIMIT 101 检测 truncated，仅解码前 100 条。全文使用 read_message，用户明确选择后才能 import_message；搜索不会修改 imported 或 Memory。
+
+V1 使用 JSON1 + 参数绑定 LIKE，百分号、下划线、反斜杠均按字面子串处理。沿用 SQLite LIKE 大小写规则（ASCII 不区分大小写，非 ASCII 不进行 Unicode 折叠）。没有全文索引，每次查询仍需扫描候选来源的 payload 并排序，耗时随数据量和 payload 大小增长；返回上限不代表扫描上限。null、空对象和空数组不作为可搜索值。只搜索已存储 payload，不下载 Email 原文，未缓存邮件正文不会命中。未知时间排在最后，同时间沿用 ID/source 稳定排序。沿用 Email 首次访问的旧索引迁移机制，不更新消息导入状态。没有字段选择、DSL、任意 SQL、深分页、语义搜索或批量导入。

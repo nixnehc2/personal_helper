@@ -22,6 +22,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-28 | [06：Message 通用关键词搜索 V1](2026-09-28-06-message-keyword-search.md) |
 | 2026-09-28 | [05：Message 数据库分页与 Email SQLite 迁移](2026-09-28-05-message-sql-pagination.md) |
 | 2026-09-28 | [03：统一 Message 查询与选择导入](2026-09-28-03-unified-message-import.md) |
 | 2026-09-28 | [02：文档归档与持续日志规则](2026-09-28-02-documentation-organization.md) |

@@ -442,6 +442,22 @@ def parse_tool_command(user):
     if user in ("update_qq", "update_qq()", "/update_qq"):
         return "update_qq", {}
     parts = user.split()
+    if parts and parts[0] == "/search_messages":
+        import shlex
+        lexer = shlex.shlex(user, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        lexer.escape = ''  # Preserve literal backslashes in keywords.
+        args = list(lexer)[1:]
+        filters = {}
+        if args and args[0] == '--source':
+            if len(args) < 3:
+                raise ValueError('用法：/search_messages [--source qq|email] <关键词>')
+            filters['source'] = args[1]
+            args = args[2:]
+        if not args or not ' '.join(args).strip():
+            raise ValueError('query 必须是非空字符串，不能仅包含空白')
+        return 'search_messages', dict(filters, query=' '.join(args))
     if parts and parts[0] == "/list_messages":
         # Preserve JSON filters; positional pagination is a small convenience.
         args = user.split(maxsplit=2)
@@ -542,7 +558,7 @@ def main():
             event_lock.release()
             exit_handler.__exit__(None, None, None)
         return 1
-    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/list_messages qq 查看消息，/read_message [source] <id> 查看全文，/import_message [source] <id> 导入选中消息，/import_email <id> 兼容邮件导入，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
+    print(f"Personal Agent | {client.model} | {files.root}\n/exit 退出，/clear 清空对话，/cancel 放弃临时修改，/update_email 同步目录，/list_messages qq 查看消息，/search_messages [--source qq|email] <关键词> 搜索消息，/read_message [source] <id> 查看全文，/import_message [source] <id> 导入选中消息，/import_email <id> 兼容邮件导入，/email <path> 导入本地邮件（--force 重复邮件也重新处理）。所有 Memory 修改先进入 Temporary，commit 时输入 yes 才提交。")
     print("/edit_email <要求> 新建草稿；/edit_email <草稿 ID> <要求> 修改草稿。后续可直接描述修改要求。/send_email <草稿 ID> 展示并确认后通过 SMTP 发送。")
     print("/automation list 查看规则；get/create/update/pause/resume/cancel 管理规则；check 检查一次；pending [规则编号] 查看待处理事件；consume 手动执行并展示回复。")
     print("/commit 审阅提交；/scheduler 锁与排队；/automation active 活动事件；/automation auto pause|resume；/automation event-resume <事件ID>；/results [事件ID] 完整结果。")
@@ -630,7 +646,7 @@ def main():
                     elif name == "update_email":
                         print(safe_display(result["table"]))
                         print(safe_display(result["sync_summary"]))
-                    elif name in ("edit_email", "send_email", "automation", "update_qq", "list_messages", "read_message"):
+                    elif name in ("edit_email", "send_email", "automation", "update_qq", "list_messages", "search_messages", "read_message"):
                         print(safe_display(result["display"]))
                     elif name == "import_message":
                         print("[message] " + safe_display(result["status"] + " | " + result.get("note", "")))

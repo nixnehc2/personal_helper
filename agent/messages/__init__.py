@@ -7,7 +7,7 @@ from .qq_adapter import qq_to_message
 from .sources import source_backend, SOURCES
 
 __all__ = ['Message', 'email_row_to_message', 'qq_to_message', 'get_message',
-           'list_messages', 'query_messages', 'read_message']
+           'list_messages', 'query_messages', 'search_messages', 'read_message']
 
 
 def get_message(source: str, id: int) -> Message:
@@ -50,9 +50,14 @@ def list_messages(source: str | None = None, *, conversation=None, time_from=Non
 
 def query_messages(source=None, *, limit=20, offset=0, **filters):
     messages = list_messages(source, limit=limit, offset=offset, **filters)
+    return dict(_summaries(messages, f'当前返回 {len(messages)} 条消息，offset={offset}'),
+                offset=offset, limit=limit)
+
+
+def _summaries(messages, heading=None):
     summaries = [dict(id=m.id, source=m.source, time=m.time, imported=m.imported,
                       **source_backend(m.source).summarize(m)) for m in messages]
-    lines = [f'当前返回 {len(summaries)} 条消息，offset={offset}']
+    lines = [heading or f'当前返回 {len(summaries)} 条消息']
     for row in summaries:
         # User content is displayed as data; no source-specific branches in the query layer.
         preview = row['preview'].replace('\r', '\\r').replace('\n', '\\n')
@@ -60,7 +65,7 @@ def query_messages(source=None, *, limit=20, offset=0, **filters):
                      f"{row['sender']} | imported={str(row['imported']).lower()} | {preview}")
     if not summaries:
         lines.append('没有符合条件的 Message')
-    return dict(messages=summaries, count=len(summaries), offset=offset, limit=limit,
+    return dict(messages=summaries, count=len(summaries),
                 display='\n'.join(lines))
 
 
@@ -69,3 +74,19 @@ def read_message(id, source=None):
     backend, message = resolve_message(id, source)
     return dict(id=id, source=message.source, time=message.time, imported=message.imported,
                 display=backend.read(message))
+
+
+def search_messages(query: str, source: str | None = None):
+    """Read-only literal substring search over all stored leaf values, newest 100."""
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError('query 必须是非空字符串，不能仅包含空白')
+    backends = ({name: source_backend(name) for name in SOURCES} if source is None
+                else {source: source_backend(source)})
+    from .pagination import page_messages
+    messages, truncated = page_messages(backends, conversation=None, begin=None, end=None,
+                                        imported=None, limit=101, offset=0, query=query)
+    import json
+    heading = f'搜索 {json.dumps(query, ensure_ascii=False)}，'
+    heading += ('结果超过 100 条，仅显示最近 100 条，请使用更具体的关键词。' if truncated
+                else f'找到 {len(messages)} 条 Message，按时间从新到旧：')
+    return dict(_summaries(messages, heading), query=query, source=source, truncated=truncated)
