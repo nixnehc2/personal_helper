@@ -349,7 +349,7 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                 else:
                     files._debug_call_id = call.get("id")
                     result = files.execute(call.get("name"), call.get("input"))
-                if call.get("name") in ("edit_email", "send_email", "automation") and "error" not in result:
+                if call.get("name") in ("edit_email", "send_email", "automation", "update_qq") and "error" not in result:
                     emit(safe_display(result["display"]))
                 if call.get("name") == "show_memory_changes" and "error" not in result:
                     for change in result["changes"]:
@@ -640,7 +640,10 @@ def main():
                     print(tool_summary(dict(name=name, input=arguments)))
                     with files.message_context(client, messages=messages,
                                              explicit_email_path=arguments["path"] if name == "email" else None):
-                        result = files.execute(name, arguments)
+                        if name == "update_qq":
+                            result = files.update_qq(interactive=True)
+                        else:
+                            result = files.execute(name, arguments)
                     if "error" in result:
                         print("[error] " + safe_display(result["error"]))
                     elif name == "update_email":

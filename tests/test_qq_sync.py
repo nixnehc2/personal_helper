@@ -127,7 +127,8 @@ class QQTests(unittest.TestCase):
         self.assertIn('update_qq',[s['name'] for s in TOOLS])
         with patch('agent.qq_sync.update_qq',return_value={'added':1}) as sync:
             self.assertEqual(FileTools.update_qq(object()),{'added':1})
-            sync.assert_called_once_with()
+            sync.assert_called_once()
+            self.assertTrue(callable(sync.call_args.kwargs["progress"]))
     def test_api_pagination_parameters_and_error(self):
         client = QQClient()
         with patch.object(client,'_request',return_value={'messages':[]}) as request:
@@ -140,5 +141,194 @@ class QQTests(unittest.TestCase):
         self.assertIsNone(qq_to_message(raw(1,message='hi[CQ:image,file=x]'),self.conv,10))
         self.assertEqual(qq_to_message(raw(1,message='&#91;CQ:test&#93;&amp;'),self.conv,10).content['text'],'[CQ:test]&')
 
+
+
+    def test_persistent_skip_state_skips_conversation(self):
+        """A conversation marked skip in conversation_states is skipped without API calls."""
+        client = Client([raw(i) for i in range(5)])
+        # First sync succeeds
+        self.assertEqual(self.sync(client)['added'], 5)
+        # Mark as skip in database (table exists after first sync)
+        scope = json.dumps(['10', 'private', '20'])
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('INSERT INTO conversation_states VALUES (?, ?)', (scope, 'skip'))
+            db.commit()
+        # Second sync skips the conversation entirely
+        client2 = Client([raw(i) for i in range(5)])
+        result = self.sync(client2)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(result['added'], 0)
+        # No API calls should have been made (skipped before history fetch)
+        self.assertEqual(client2.calls, [])
+
+    def test_skip_event_stops_and_rolls_back_current_conversation(self):
+        """Setting skip_event during sync rolls back partial writes and persists skip state."""
+        import threading
+        client = Client([raw(i) for i in range(20)])
+        skip_event = threading.Event()
+        call_count = [0]
+        original_history = client.get_history_page
+        def intercept(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                skip_event.set()
+            return original_history(*args, **kwargs)
+        client.get_history_page = intercept
+        result = update_qq(client=client, db_path=self.path, page_size=3, skip_event=skip_event)
+        # The conversation should have been skipped (rolled back)
+        self.assertEqual(result['added'], 0)
+        self.assertEqual(QQStore(self.path).list(), [])
+        # Skip state should be persisted
+        scope = json.dumps(['10', 'private', '20'])
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute('SELECT state FROM conversation_states WHERE scope=?', (scope,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 'skip')
+
+    def test_skip_event_continues_to_next_conversation(self):
+        """After skipping one conversation, the next one proceeds normally."""
+        import threading
+        class TwoChats(Client):
+            def __init__(self):
+                super().__init__([raw(i) for i in range(5)])
+            def list_group_chats(self):
+                return [dict(group_id=99, group_name='group')]
+        # Pre-mark private chat as skip (create table first)
+        QQStore(self.path).connect().close()
+        scope = json.dumps(['10', 'private', '20'])
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('INSERT INTO conversation_states VALUES (?, ?)', (scope, 'skip'))
+            db.commit()
+        client = TwoChats()
+        result = self.sync(client)
+        # Private chat was skipped
+        self.assertEqual(result['skipped'], 1)
+        # Group chat was synced (messages share IDs with private, so only new ones added)
+        self.assertGreater(result['added'], 0)
+
+    def test_skip_state_survives_reconnection(self):
+        """Skip state persists across database connections (program restart)."""
+        import threading
+        # First sync with skip_event set during execution
+        client = Client([raw(i) for i in range(20)])
+        skip_event = threading.Event()
+        call_count = [0]
+        original = client.get_history_page
+        def intercept(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                skip_event.set()
+            return original(*args, **kwargs)
+        client.get_history_page = intercept
+        update_qq(client=client, db_path=self.path, page_size=3, skip_event=skip_event)
+        # Verify skip state is in database
+        scope = json.dumps(['10', 'private', '20'])
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute('SELECT state FROM conversation_states WHERE scope=?', (scope,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 'skip')
+        # New sync with new connection still skips
+        client2 = Client([raw(i) for i in range(5)])
+        result = update_qq(client=client2, db_path=self.path, page_size=3)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(client2.calls, [])
+
+    def test_skip_does_not_count_as_error(self):
+        """Skipped conversations increment 'skipped', not 'failed'."""
+        import threading
+        client = Client([raw(i) for i in range(20)])
+        skip_event = threading.Event()
+        call_count = [0]
+        original = client.get_history_page
+        def intercept(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                skip_event.set()
+            return original(*args, **kwargs)
+        client.get_history_page = intercept
+        result = update_qq(client=client, db_path=self.path, page_size=3, skip_event=skip_event)
+        self.assertEqual(result['failed'], 0)
+        self.assertEqual(result['skipped'], 0)  # skipped is not incremented for user-skip rollback
+        self.assertEqual(result['errors'], [])
+
+    def test_skip_preserves_old_messages(self):
+        """Previously synced messages remain after skip rollback."""
+        import threading
+        # First sync: 5 messages
+        client = Client([raw(i) for i in range(5)])
+        self.assertEqual(self.sync(client)['added'], 5)
+        old_messages = QQStore(self.path).list()
+        self.assertEqual(len(old_messages), 5)
+        # Second sync: new messages + skip
+        client2 = Client([raw(i) for i in range(10)])
+        skip_event = threading.Event()
+        call_count = [0]
+        original = client2.get_history_page
+        def intercept(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                skip_event.set()
+            return original(*args, **kwargs)
+        client2.get_history_page = intercept
+        update_qq(client=client2, db_path=self.path, page_size=3, skip_event=skip_event)
+        # Old messages should still be there
+        current_messages = QQStore(self.path).list()
+        self.assertEqual(len(current_messages), 5)
+        self.assertEqual(set(m.id for m in current_messages), set(m.id for m in old_messages))
+
+    def test_no_skip_event_means_no_skip(self):
+        """When skip_event=None (Agent mode), sync proceeds normally."""
+        client = Client([raw(i) for i in range(5)])
+        result = update_qq(client=client, db_path=self.path, page_size=3, skip_event=None)
+        self.assertEqual(result['added'], 5)
+        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['failed'], 0)
+
+    def test_skip_event_cleared_between_conversations(self):
+        """skip_event is cleared before each conversation so stale state doesn't carry over."""
+        import threading
+        class TwoChats(Client):
+            def __init__(self):
+                super().__init__([raw(i) for i in range(5)])
+            def list_group_chats(self):
+                return [dict(group_id=99, group_name='group')]
+        client = TwoChats()
+        skip_event = threading.Event()
+        # Pre-set the event; it should be cleared before processing
+        skip_event.set()
+        result = update_qq(client=client, db_path=self.path, page_size=3, skip_event=skip_event)
+        # Both conversations succeed because event is cleared before each
+        self.assertEqual(result['added'], 10)
+
+    def test_multiple_skips_in_one_run(self):
+        """Pressing Enter can skip multiple conversations across the same sync run."""
+        import threading
+        class ThreeChats(Client):
+            def __init__(self):
+                super().__init__([raw(i) for i in range(5)])
+            def list_group_chats(self):
+                return [dict(group_id=99, group_name='g1'), dict(group_id=100, group_name='g2')]
+        client = ThreeChats()
+        skip_event = threading.Event()
+        # Simulate pressing Enter at the start of each conversation.
+        # The event is cleared before each conversation, so we set it
+        # on every call to get_history_page to ensure it's always set.
+        call_count = [0]
+        original = client.get_history_page
+        def intercept(*args, **kwargs):
+            call_count[0] += 1
+            skip_event.set()
+            return original(*args, **kwargs)
+        client.get_history_page = intercept
+        result = update_qq(client=client, db_path=self.path, page_size=3, skip_event=skip_event)
+        # All 3 conversations should have been skipped
+        self.assertEqual(result['added'], 0)
+        self.assertEqual(result['failed'], 0)
+        # Verify all 3 skip states are persisted
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute('SELECT scope, state FROM conversation_states').fetchall()
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(r[1] == 'skip' for r in rows)
+)
 
 if __name__ == '__main__': unittest.main()

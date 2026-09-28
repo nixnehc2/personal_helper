@@ -90,9 +90,22 @@ class FileTools:
         client, messages, emit, _ = self._message_context
         return import_message(id, client, self, source=source, messages=messages, emit=emit)
 
-    def update_qq(self):
+    def update_qq(self, interactive=False):
+        import sys
         from .qq_sync import update_qq
-        return update_qq()
+        from .qq_progress import QQSyncProgress, ConsoleSkipEvent
+        context = getattr(self, "_message_context", None)
+        emit = context[2] if context is not None else print
+        # Poll the Windows console only while sync checks for cancellation. No
+        # background reader can outlive sync and consume the next chat command.
+        skip_event = ConsoleSkipEvent() if interactive and os.name == 'nt' and sys.stdin.isatty() else None
+        progress = QQSyncProgress(emit=emit)
+        progress.can_skip = skip_event is not None
+
+        try:
+            return update_qq(progress=progress, skip_event=skip_event)
+        finally:
+            progress.close()
 
     def automation(self, action, id=None, rule=None):
         from .automations import AutomationStore

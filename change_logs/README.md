@@ -22,8 +22,10 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-28 | [07：复查并提交 QQ 进度与会话跳过](2026-09-28-07-review-pending-qq-changes.md) |
 | 2026-09-28 | [06：Message 通用关键词搜索 V1](2026-09-28-06-message-keyword-search.md) |
 | 2026-09-28 | [05：Message 数据库分页与 Email SQLite 迁移](2026-09-28-05-message-sql-pagination.md) |
+| 2026-09-28 | [04：QQ 同步跳过会话功能](2026-09-28-04-qq-skip-conversation.md) |
 | 2026-09-28 | [03：统一 Message 查询与选择导入](2026-09-28-03-unified-message-import.md) |
 | 2026-09-28 | [02：文档归档与持续日志规则](2026-09-28-02-documentation-organization.md) |
 | 2026-09-28 | [01：QQ 纯文字 Adapter、增量同步与去重](2026-09-28-01-qq-text-sync.md) |

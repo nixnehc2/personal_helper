@@ -1,5 +1,6 @@
 """One-shot QQ sync. Message insertion and separate checkpoints commit together."""
 import json
+from copy import deepcopy
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
@@ -20,6 +21,7 @@ class QQStore:
         db = sqlite3.connect(self.path, timeout=30)
         db.execute("CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS checkpoints (scope TEXT PRIMARY KEY, message_id TEXT NOT NULL)")
+        db.execute("CREATE TABLE IF NOT EXISTS conversation_states (scope TEXT PRIMARY KEY, state TEXT NOT NULL)")
         return db
 
     def list(self, imported=None):
@@ -59,7 +61,8 @@ class QQStore:
             db.close()
 
 
-def update_qq(config=None, db_path=None, client=None, page_size=100):
+def update_qq(config=None, db_path=None, client=None, page_size=100, progress=None, skip_event=None):
+    """Sync QQ messages. skip_event is a threading.Event; when set, the current conversation is skipped."""
     if not 2 <= page_size <= 1000:
         raise ValueError("QQ page_size 必须在 2~1000 之间")
     if client is None:
@@ -67,8 +70,33 @@ def update_qq(config=None, db_path=None, client=None, page_size=100):
         config = load_config() if config is None else config
         client = QQClient(config.get("QQ_API_URL", "http://127.0.0.1:3000"), config.get("QQ_ACCESS_TOKEN", ""))
     result = dict(scanned=0, text=0, added=0, duplicates=0, skipped=0, failed=0, errors=[])
+    # Observation only: snapshots never share mutable objects with sync state.
+    total_conversations, current_conversation, completed_conversations = None, 0, 0
+
+    def report(event, conversation=None, counts=None, page=0, *, provisional=False,
+               error=None, rolled_back=False):
+        if progress is None:
+            return
+        try:
+            committed = {key: result[key] for key in ("scanned", "text", "added", "duplicates", "skipped", "failed")}
+            current = dict(counts) if counts is not None else dict.fromkeys(committed, 0)
+            if rolled_back and error is not None:
+                current["failed"] += 1
+            progress(deepcopy(dict(
+                event=event, current_conversation=current_conversation,
+                completed_conversations=completed_conversations, total_conversations=total_conversations,
+                conversation=conversation, page=page, conversation_counts=current,
+                committed_counts=committed,
+                total_counts={key: value + (current[key] if provisional else 0) for key, value in committed.items()},
+                provisional=provisional, rolled_back=rolled_back, error=error,
+            )))
+        except Exception:
+            # A broken display/observer must not change transactions or the result.
+            pass
+
     db = QQStore(db_path).connect()
     try:
+        report("connecting")
         account = str(client.get_login_info()["user_id"])
         conversations = []
         for kind, method, key, name in (
@@ -80,9 +108,29 @@ def update_qq(config=None, db_path=None, client=None, page_size=100):
             except (QQClientError, ValueError, TypeError, KeyError) as exc:
                 result["failed"] += 1
                 result["errors"].append(f"{kind}: {exc}")
+                report("error", {"type": kind}, error=result["errors"][-1])
+        total_conversations = len(conversations)
+        report("start")
         for conversation in conversations:
             scope = json.dumps([account, conversation["type"], str(conversation["id"])])
             counts = dict(scanned=0, text=0, added=0, duplicates=0, skipped=0, failed=0)
+            current_conversation += 1
+            page = 0
+            rolled_back = False
+
+            # Check persistent skip state before starting.
+            row = db.execute("SELECT state FROM conversation_states WHERE scope=?", (scope,)).fetchone()
+            if row and row[0] == "skip":
+                result["skipped"] += 1
+                report("conversation_skipped", conversation, counts)
+                completed_conversations += 1
+                continue
+
+            # Clear any leftover skip request from a previous conversation.
+            if skip_event is not None:
+                skip_event.clear()
+
+            report("conversation_start", conversation, counts)
             try:
                 db.execute("BEGIN IMMEDIATE")
                 checkpoint = db.execute("SELECT message_id FROM checkpoints WHERE scope=?", (scope,)).fetchone()
@@ -90,8 +138,19 @@ def update_qq(config=None, db_path=None, client=None, page_size=100):
                 cursor, newest, seen = None, None, set()
                 message_failed = False
                 for _ in range(10000):
+                    # Check skip request before each page.
+                    if skip_event is not None and skip_event.is_set():
+                        break
+
                     batch = client.get_history_page(conversation["type"], conversation["id"], page_size, cursor)
+                    page += 1
+
+                    # Check skip request after network call returns.
+                    if skip_event is not None and skip_event.is_set():
+                        break
+
                     if not batch:
+                        report("page", conversation, counts, page, provisional=True)
                         break
                     ids = [str(m["message_id"]) for m in batch]
                     newest = newest or ids[-1]
@@ -99,9 +158,14 @@ def update_qq(config=None, db_path=None, client=None, page_size=100):
                     if not fresh:
                         # Inclusive boundary at the oldest available message is normal.
                         if len(batch) == 1 and ids[0] == cursor:
+                            report("page", conversation, counts, page, provisional=True)
                             break
                         raise ValueError("QQ 历史分页未前进；保留 checkpoint 以便重试")
                     for raw, original_id in fresh:
+                        # Check skip request during message processing.
+                        if skip_event is not None and skip_event.is_set():
+                            break
+
                         if original_id in seen:
                             continue
                         seen.add(original_id)
@@ -119,26 +183,51 @@ def update_qq(config=None, db_path=None, client=None, page_size=100):
                             counts["failed"] += 1
                             message_failed = True
                             result["errors"].append(f"{scope} / {original_id}: {exc}")
+                            report("message_error", conversation, counts, page,
+                                   provisional=True, error=result["errors"][-1])
+
+                    # Break out of outer loop if skip requested.
+                    if skip_event is not None and skip_event.is_set():
+                        break
+
+                    report("page", conversation, counts, page, provisional=True)
                     if checkpoint in ids or len(batch) < page_size:
                         break
                     cursor = ids[0]
                 else:
                     raise ValueError("QQ 历史超过分页上限；保留 checkpoint")
-                if newest is not None and not message_failed:
-                    db.execute("INSERT OR REPLACE INTO checkpoints VALUES (?, ?)", (scope, newest))
-                db.commit()
-                for key, value in counts.items():
-                    result[key] += value
+
+                # Handle skip: rollback partial writes and persist skip state.
+                if skip_event is not None and skip_event.is_set():
+                    db.rollback()
+                    rolled_back = True
+                    # Save skip state in a separate transaction.
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute("INSERT OR REPLACE INTO conversation_states VALUES (?, ?)", (scope, "skip"))
+                    db.commit()
+                    report("conversation_skipped_user", conversation, counts, page, rolled_back=True)
+                else:
+                    if newest is not None and not message_failed:
+                        db.execute("INSERT OR REPLACE INTO checkpoints VALUES (?, ?)", (scope, newest))
+                    db.commit()
+                    for key, value in counts.items():
+                        result[key] += value
             except (QQClientError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
                 db.rollback()
                 result["failed"] += 1
                 result["errors"].append(f"{scope}: {exc}")
+                rolled_back = True
+                report("error", conversation, counts, page, error=result["errors"][-1], rolled_back=True)
+            completed_conversations += 1
+            report("conversation_end", conversation, counts, page, rolled_back=rolled_back)
     except (QQClientError, ValueError, TypeError, KeyError) as exc:
         result["failed"] += 1
         result["errors"].append(str(exc))
+        report("error", error=result["errors"][-1])
     finally:
         db.close()
     result["display"] = ("QQ 同步完成" if not result["failed"] else "QQ 同步完成（存在失败，请重试）") + "\n" + "\n".join(
         f"{label}：{result[key]}" for label, key in (("扫描", "scanned"), ("纯文字", "text"),
         ("新增", "added"), ("重复", "duplicates"), ("跳过非文字", "skipped"), ("失败", "failed")))
+    report("finish")
     return result
