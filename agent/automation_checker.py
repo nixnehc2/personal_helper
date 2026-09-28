@@ -120,6 +120,42 @@ def loop_lock(store, purpose="checker"):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def qq_startup_sync(config=None, whitelist_path=None):
+    """Best effort once per long-lived checker; never fall back to full sync."""
+    from .qq_sync_selector import load_whitelist
+    from .qq_sync import update_qq
+
+    try:
+        allowed = load_whitelist(whitelist_path)
+    except FileNotFoundError:
+        logging.warning("QQ sync whitelist not configured")
+        return
+    except Exception as error:
+        logging.warning("QQ startup sync skipped: invalid sync_conversations.json: %s", error)
+        return
+    if not allowed:
+        logging.info("[QQ] startup sync: no conversations selected")
+        return
+
+    def progress(event):
+        if event["event"] == "start":
+            logging.info("[QQ] selected %s conversations", event["total_conversations"])
+        elif event["event"] in ("conversation_start", "conversation_skipped"):
+            c = event["conversation"]
+            logging.info("[QQ] [%s:%s] %s%s", c["type"], c["id"], c["name"],
+                         " (persistent skip)" if event["event"] == "conversation_skipped" else "")
+
+    try:
+        logging.info("[QQ] startup sync")
+        result = update_qq(config=config, allowed_conversations=allowed, progress=progress)
+        if result["failed"]:
+            logging.warning("[QQ] startup sync failed: %s", "; ".join(result["errors"]))
+        else:
+            logging.info("[QQ] startup sync completed")
+    except Exception as error:
+        logging.warning("[QQ] startup sync failed: %s", error)
+
+
 def main():
     parser = argparse.ArgumentParser(description="前台时间/邮件检查器；仅入队，不执行任务")
     parser.add_argument("--interval", type=float, help="检查间隔秒数（默认配置或 10）")
@@ -136,6 +172,7 @@ def main():
             logging.info(result["display"])
             return int(bool(result["failed"]))
         with loop_lock(store):
+            qq_startup_sync(store.settings)
             logging.info("检查循环已启动；Ctrl+C 退出")
             while True:
                 try:

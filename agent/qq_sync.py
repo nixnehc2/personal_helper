@@ -1,5 +1,6 @@
 """One-shot QQ sync. Message insertion and separate checkpoints commit together."""
 import json
+import logging
 from copy import deepcopy
 import sqlite3
 from dataclasses import asdict
@@ -8,6 +9,7 @@ from pathlib import Path
 from .messages.models import Message
 from .messages.qq_adapter import qq_to_message
 from .qq_client import QQClient, QQClientError
+from .qq_conversations import build_conversation_list, conversation_identity
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data/qq/messages.sqlite3"
 
@@ -61,8 +63,12 @@ class QQStore:
             db.close()
 
 
-def update_qq(config=None, db_path=None, client=None, page_size=100, progress=None, skip_event=None):
-    """Sync QQ messages. skip_event is a threading.Event; when set, the current conversation is skipped."""
+def update_qq(config=None, db_path=None, client=None, page_size=100, progress=None, skip_event=None,
+              allowed_conversations=None):
+    """Sync all conversations when allowed_conversations is None, otherwise only (type, str(id)) identities.
+
+    Persistent skip still wins. skip_event skips the current conversation.
+    """
     if not 2 <= page_size <= 1000:
         raise ValueError("QQ page_size 必须在 2~1000 之间")
     if client is None:
@@ -98,17 +104,18 @@ def update_qq(config=None, db_path=None, client=None, page_size=100, progress=No
     try:
         report("connecting")
         account = str(client.get_login_info()["user_id"])
-        conversations = []
-        for kind, method, key, name in (
-            ("group", client.list_group_chats, "group_id", "group_name"),
-            ("private", client.list_private_chats, "user_id", "nickname"),
-        ):
-            try:
-                conversations.extend(dict(type=kind, id=c[key], name=c.get(name, "")) for c in method())
-            except (QQClientError, ValueError, TypeError, KeyError) as exc:
-                result["failed"] += 1
-                result["errors"].append(f"{kind}: {exc}")
-                report("error", {"type": kind}, error=result["errors"][-1])
+        def discovery_error(kind, exc):
+            result["failed"] += 1
+            result["errors"].append(f"{kind}: {exc}")
+            report("error", {"type": kind}, error=result["errors"][-1])
+
+        conversations = build_conversation_list(client, on_error=discovery_error)
+        if allowed_conversations is not None:
+            allowed = set(allowed_conversations)
+            found = {conversation_identity(c) for c in conversations}
+            for kind, peer in sorted(allowed - found):
+                logging.warning("configured QQ conversation not found: [%s] %s", kind, peer)
+            conversations = [c for c in conversations if conversation_identity(c) in allowed]
         total_conversations = len(conversations)
         report("start")
         for conversation in conversations:

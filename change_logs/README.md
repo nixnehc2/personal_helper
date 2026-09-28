@@ -6,6 +6,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [QQ 启动同步与白名单](docs/QQ-STARTUP-SYNC.md) | 人工选择稳定会话身份、checker 启动同步与故障边界 |
 | [完整使用说明](docs/README.md) | 启动、配置、Memory、文件读写、Email、Automation、QQ |
 | [统一 Message 第三阶段](docs/MESSAGE-V3.md) | 查询、查看、选择导入与 imported/Memory 完成边界 |
 | [Email V1](docs/EMAIL-V1.md) | 邮件功能与导入流程 |
@@ -22,6 +23,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-28 | [08：QQ 稳定身份白名单与启动同步](2026-09-28-08-qq-startup-whitelist.md) |
 | 2026-09-28 | [07：复查并提交 QQ 进度与会话跳过](2026-09-28-07-review-pending-qq-changes.md) |
 | 2026-09-28 | [06：Message 通用关键词搜索 V1](2026-09-28-06-message-keyword-search.md) |
 | 2026-09-28 | [05：Message 数据库分页与 Email SQLite 迁移](2026-09-28-05-message-sql-pagination.md) |

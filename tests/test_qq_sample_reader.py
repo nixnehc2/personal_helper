@@ -78,8 +78,8 @@ class BuildConversationListTests(unittest.TestCase):
         client = self._make_client(groups, [])
         result = build_conversation_list(client)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["chat_type"], "group")
-        self.assertEqual(result[0]["chat_id"], 100)
+        self.assertEqual(result[0]["type"], "group")
+        self.assertEqual(result[0]["id"], "100")
         self.assertEqual(result[0]["name"], "测试群A")
 
     def test_friends_only(self):
@@ -90,7 +90,7 @@ class BuildConversationListTests(unittest.TestCase):
         client = self._make_client([], friends)
         result = build_conversation_list(client)
         self.assertEqual(len(result), 2)
-        types = [c["chat_type"] for c in result]
+        types = [c["type"] for c in result]
         self.assertTrue(all(t == "private" for t in types))
 
     def test_mixed_sorted_groups_first(self):
@@ -98,8 +98,8 @@ class BuildConversationListTests(unittest.TestCase):
         friends = [{"user_id": 99, "nickname": "张三", "remark": ""}]
         client = self._make_client(groups, friends)
         result = build_conversation_list(client)
-        self.assertEqual(result[0]["chat_type"], "group")
-        self.assertEqual(result[1]["chat_type"], "private")
+        self.assertEqual(result[0]["type"], "group")
+        self.assertEqual(result[1]["type"], "private")
 
     def test_display_index_sequential(self):
         groups = [{"group_id": i, "group_name": f"G{i}"} for i in range(5)]
@@ -115,9 +115,9 @@ class BuildConversationListTests(unittest.TestCase):
         ]
         client = self._make_client([], friends)
         result = build_conversation_list(client)
-        names = {c["chat_id"]: c["name"] for c in result}
-        self.assertEqual(names[1], "备注1")
-        self.assertEqual(names[2], "nick2")
+        names = {c["id"]: c["name"] for c in result}
+        self.assertEqual(names["1"], "备注1")
+        self.assertEqual(names["2"], "nick2")
 
     def test_empty_remark_and_nickname_falls_back_to_id(self):
         friends = [
@@ -146,11 +146,11 @@ class DisplayIndexMappingTests(unittest.TestCase):
         convs = build_conversation_list(client)
         # Selection 1 -> first (groups sorted by name, so 群A first)
         sel1 = convs[0]
-        self.assertEqual(sel1["chat_id"], 10)
-        self.assertEqual(sel1["chat_type"], "group")
+        self.assertEqual(sel1["id"], "10")
+        self.assertEqual(sel1["type"], "group")
         sel3 = convs[2]
-        self.assertEqual(sel3["chat_id"], 30)
-        self.assertEqual(sel3["chat_type"], "private")
+        self.assertEqual(sel3["id"], "30")
+        self.assertEqual(sel3["type"], "private")
 
 
 # ===========================================================================
@@ -205,7 +205,7 @@ class SaveSampleTests(unittest.TestCase):
     """Test that save_sample writes complete, valid JSON."""
 
     def test_structure_contains_required_keys(self):
-        conv = {"display_index": 1, "chat_type": "group", "chat_id": 123, "name": "测试群"}
+        conv = {"display_index": 1, "type": "group", "id": 123, "name": "测试群"}
         messages = [{"message_id": 1, "text": "hi"}]
         with tempfile.TemporaryDirectory() as tmpdir:
             path = save_sample(conv, 20, messages, samples_dir=Path(tmpdir))
@@ -223,7 +223,7 @@ class SaveSampleTests(unittest.TestCase):
 
     def test_messages_preserved_exactly(self):
         messages = _load_fixture("group_complex_messages.json")
-        conv = {"display_index": 1, "chat_type": "group", "chat_id": 9988776655, "name": "复杂群"}
+        conv = {"display_index": 1, "type": "group", "id": 9988776655, "name": "复杂群"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = save_sample(conv, 5, messages, samples_dir=Path(tmpdir))
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -239,14 +239,14 @@ class SaveSampleTests(unittest.TestCase):
 
     def test_utf8_chinese_content_preserved(self):
         messages = [{"message_id": 1, "raw_message": "你好世界 🌍"}]
-        conv = {"display_index": 1, "chat_type": "private", "chat_id": 1, "name": "测试"}
+        conv = {"display_index": 1, "type": "private", "id": 1, "name": "测试"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = save_sample(conv, 1, messages, samples_dir=Path(tmpdir))
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["messages"][0]["raw_message"], "你好世界 🌍")
 
     def test_empty_messages_list(self):
-        conv = {"display_index": 1, "chat_type": "group", "chat_id": 1, "name": "空群"}
+        conv = {"display_index": 1, "type": "group", "id": 1, "name": "空群"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = save_sample(conv, 10, [], samples_dir=Path(tmpdir))
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -261,7 +261,7 @@ class SegmentPreservationTests(unittest.TestCase):
 
     def test_complex_message_segments_preserved_in_save(self):
         messages = _load_fixture("group_complex_messages.json")
-        conv = {"display_index": 1, "chat_type": "group", "chat_id": 99, "name": "测试"}
+        conv = {"display_index": 1, "type": "group", "id": 99, "name": "测试"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = save_sample(conv, 5, messages, samples_dir=Path(tmpdir))
             data = json.loads(path.read_text(encoding="utf-8"))

@@ -23,6 +23,7 @@ from typing import Any
 
 from .qq_client import QQClient, QQClientError, QQConnectionError
 from .llm import load_config
+from .qq_conversations import build_conversation_list
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -45,58 +46,14 @@ def _build_client() -> QQClient:
 # ---------------------------------------------------------------------------
 # Conversation list helpers
 # ---------------------------------------------------------------------------
-def build_conversation_list(client: QQClient) -> list[dict[str, Any]]:
-    """Fetch groups and friends, return a unified sorted list.
-
-    Each element::
-
-        {
-            "display_index": int,
-            "chat_type": "group" | "private",
-            "chat_id": int,
-            "name": str,
-        }
-
-    ``display_index`` is ephemeral -- only for this session's selection.
-    """
-    groups = client.list_group_chats()
-    friends = client.list_private_chats()
-
-    conversations: list[dict[str, Any]] = []
-    for g in groups:
-        conversations.append({
-            "chat_type": "group",
-            "chat_id": g.get("group_id", 0),
-            "name": g.get("group_name", "未知群"),
-        })
-    for f in friends:
-        remark = (f.get("remark") or "").strip()
-        nickname = (f.get("nickname") or "").strip()
-        display_name = remark if remark else nickname if nickname else str(f.get("user_id", "未知"))
-        conversations.append({
-            "chat_type": "private",
-            "chat_id": f.get("user_id", 0),
-            "name": display_name,
-        })
-
-    # Stable sort: groups first, then private, within each by name.
-    type_order = {"group": 0, "private": 1}
-    conversations.sort(key=lambda c: (type_order.get(c["chat_type"], 9), c["name"]))
-
-    for idx, conv in enumerate(conversations, start=1):
-        conv["display_index"] = idx
-
-    return conversations
-
-
 def print_conversation_list(conversations: list[dict[str, Any]]) -> None:
     """Pretty-print the conversation list to stdout."""
     print("\n可用 QQ 会话：\n")
     for c in conversations:
-        type_label = "群聊" if c["chat_type"] == "group" else "私聊"
+        type_label = "群聊" if c["type"] == "group" else "私聊"
         id_hint = (
-            f"(群号: {c['chat_id']})" if c["chat_type"] == "group"
-            else f"(QQ: {c['chat_id']})"
+            f"(群号: {c['id']})" if c["type"] == "group"
+            else f"(QQ: {c['id']})"
         )
         print(f"  [{c['display_index']}] [{type_label}] {c['name']} {id_hint}")
     print()
@@ -197,7 +154,7 @@ def save_sample(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     filename = generate_sample_filename(
-        conversation["chat_type"], conversation["chat_id"]
+        conversation["type"], conversation["id"]
     )
     path = out_dir / filename
 
@@ -205,8 +162,8 @@ def save_sample(
         "sample_version": 1,
         "captured_at": datetime.now().astimezone().isoformat(),
         "conversation": {
-            "type": conversation["chat_type"],
-            "id": conversation["chat_id"],
+            "type": conversation["type"],
+            "id": conversation["id"],
             "name": conversation["name"],
         },
         "requested_count": requested_count,
@@ -281,7 +238,7 @@ def main() -> int:
     n_convs = len(conversations)
     sel = _prompt_int("请输入会话编号：", min_val=1, max_val=n_convs)
     chosen = conversations[sel - 1]
-    type_label = "群聊" if chosen["chat_type"] == "group" else "私聊"
+    type_label = "群聊" if chosen["type"] == "group" else "私聊"
     print(f"\n  已选择：[{type_label}] {chosen['name']}")
 
     # 4. Message count
@@ -294,10 +251,10 @@ def main() -> int:
     # 5. Fetch messages
     print(f"\n正在读取 {chosen['name']} 最近 {count} 条消息...")
     try:
-        if chosen["chat_type"] == "group":
-            messages = client.get_group_messages(chosen["chat_id"], count)
+        if chosen["type"] == "group":
+            messages = client.get_group_messages(chosen["id"], count)
         else:
-            messages = client.get_private_messages(chosen["chat_id"], count)
+            messages = client.get_private_messages(chosen["id"], count)
     except QQClientError as exc:
         print(f"\n读取消息失败：{exc}")
         return 1
