@@ -9,6 +9,7 @@
 
 ## 实际改动
 
+- `agent/tools.py`：更新 automation 工具描述，将 "match 至少一个 ..." 改为 "match 可包含 ...（均可省略；省略所有条件则匹配全部邮件）"，使 LLM 允许创建空条件规则。
 - `agent/automation_triggers.py`：移除 `if not match: raise ValueError("邮件规则至少需要一个匹配条件")` 校验，空 `match={}` 不再被拒绝。`object_fields` 仍确保只允许已知字段。
 - `tests/test_automations.py`：从 `test_email_validation_no_network` 中移除 `("match", {})` 作为无效配置用例。
 - `tests/test_automation_email.py`：
