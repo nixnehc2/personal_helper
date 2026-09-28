@@ -224,7 +224,7 @@ class EmailMemoryTests(unittest.TestCase):
     def test_ingest_uses_ordinary_conversation_candidate_policy(self):
         from agent.email_workflow import INGEST_RULES
         self.assertIn("proactive Temporary Memory candidate policy", INGEST_RULES)
-        self.assertIn("call commit_memory_changes to enter user review", INGEST_RULES)
+        self.assertIn("call commit_memory_changes to validate and automatically commit Temporary Memory", INGEST_RULES)
 
     def test_ingest_prompt_requires_derived_candidates_for_durable_email_signals(self):
         from agent.email_workflow import INGEST_RULES

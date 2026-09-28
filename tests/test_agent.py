@@ -51,12 +51,12 @@ class DisplayTests(unittest.TestCase):
     def test_commit_confirmation_omits_raw_email_diff(self):
         raw_diff = "BASE64_DIFF" * 10000
         output = StringIO()
-        with patch("builtins.input", return_value="no"), redirect_stdout(output):
+        with patch("builtins.input", side_effect=AssertionError("must not prompt")), redirect_stdout(output):
             result = confirm_transaction("commit", [
                 SimpleNamespace(path="inbox/email/archive.eml", action="create", diff=raw_diff),
                 SimpleNamespace(path="pending/candidate.md", action="create", diff="+candidate"),
             ])
-        self.assertEqual(result, "no")
+        self.assertEqual(result, "yes")
         self.assertIn("[原始邮件归档] diff 已省略", output.getvalue())
         self.assertIn("+candidate", output.getvalue())
         self.assertNotIn("BASE64_DIFF", output.getvalue())
@@ -350,7 +350,7 @@ class ToolLifecycleTests(unittest.TestCase):
         self.assertIn("只修改 Temporary Memory，不会直接修改 Formal Memory。", descriptions["write_memory"])
         self.assertIn("只修改 Temporary Memory，不会直接修改 Formal Memory。", descriptions["edit_memory"])
         self.assertIn("只修改 Temporary Memory，不会直接修改 Formal Memory。", descriptions["delete_memory"])
-        self.assertIn("当前修改完成，请进入用户 review。", descriptions["commit_memory_changes"])
+        self.assertIn("当前修改完成，请提交 Temporary Memory。", descriptions["commit_memory_changes"])
 
     def test_ordinary_knowledge_answer_does_not_create_memory(self):
         (self.root / "AGENT.md").write_text("protocol", encoding="utf-8")

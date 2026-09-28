@@ -25,6 +25,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-29 | [04：Memory 默认提交与邮件非阻塞确认](2026-09-29-04-nonblocking-email-approval.md) |
 | 2026-09-29 | [03：QQ 混合消息可读内容适配](2026-09-29-03-qq-readable-segments.md) |
 | 2026-09-29 | [02：General Import Agent](2026-09-29-02-general-import-agent.md) |
 | 2026-09-29 | [01：QQ 持久化周期同步](2026-09-29-01-qq-persistent-sync-schedule.md) |

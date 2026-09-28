@@ -110,7 +110,8 @@ class GeneralImportTests(unittest.TestCase):
             draft = DraftStore().save(dict(to='recipient@example.test', subject='Test', body='Test body'), None)
             client = ScriptClient([[('send_email', dict(draft_id=draft['id']))]])
             self.assertTrue(self.execute(client)['imported'])
-            self.files.confirm_email.assert_called_once()
+            self.files.confirm_email.assert_not_called()
+            self.assertIsNotNone(self.files.pending_email_send)
             smtp.assert_not_called()
             self.assertEqual(DraftStore().read(draft['id'])['status'], 'draft')
 

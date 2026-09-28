@@ -185,17 +185,14 @@ print(json.dumps(result))
         self.consume()
         self.client.complete.assert_called_once()
 
-    def test_send_tool_keeps_runtime_confirmation_callback(self):
+    def test_send_request_waits_for_console_feedback(self):
         self.files.confirm_email = Mock(return_value=False)
-        self.client.complete.side_effect = [call("send_email", draft_id=5), answer("未发送。")]
-        def send(draft_id, confirm):
-            self.assertEqual(draft_id, 5)
-            self.assertIs(confirm, self.files.confirm_email)
-            self.assertFalse(confirm(dict(id=5)))
-            return dict(display="用户未批准发送", status="cancelled")
-        with patch("agent.email_send.send_email", side_effect=send):
+        self.client.complete.side_effect = [call("send_email", draft_id=5)]
+        snapshot = dict(id=5, to="a@example.test", subject="test", body="body")
+        with patch("agent.email_send.request_email_send", return_value=snapshot), patch("agent.email_send.smtp_deliver") as smtp:
             self.consume()
-        self.files.confirm_email.assert_called_once()
+        self.files.confirm_email.assert_not_called()
+        smtp.assert_not_called()
 
     def test_chat_command_is_not_model_tool_or_chat_history(self):
         self.assertEqual(parse_tool_command("/automation consume"), ("automation_consume", {}))

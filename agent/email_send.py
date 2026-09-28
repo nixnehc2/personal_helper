@@ -71,24 +71,29 @@ def smtp_deliver(message, settings, connect=None):
         raise ValueError("SMTP 连接或发送失败，草稿未删除，可以重新尝试") from None
 
 
-def send_email(draft_id, confirm, connect=None):
+SNAPSHOT_KEYS = ("id", "to", "subject", "body", "status", "created_at", "updated_at")
+
+
+def request_email_send(draft_id):
     if type(draft_id) is not int or draft_id <= 0:
         raise ValueError("草稿 ID 必须是正整数")
-    if not callable(confirm):
-        raise ValueError("发送邮件必须经过 Runtime 用户确认")
     store = DraftStore()
-    # Keep the approval, SMTP operation, and sent-state update serialized.
     with EmailIndex(store.path / "drafts.json").locked():
         draft = store.read(draft_id)
         validate_for_sending(draft)
-        snapshot = {key: draft[key] for key in ("id", "to", "subject", "body",
-                                                "status", "created_at", "updated_at")}
-        if not confirm(snapshot):
-            return dict(snapshot, status="cancelled", message=f"发送已取消，Draft #{draft_id} 保留。",
-                        display=f"发送已取消，Draft #{draft_id} 保留。")
+        return {key: draft[key] for key in SNAPSHOT_KEYS}
+
+
+def send_email_confirmed(snapshot, connect=None):
+    """Runtime-only: send the reviewed snapshot after explicit approval."""
+    store = DraftStore()
+    with EmailIndex(store.path / "drafts.json").locked():
+        draft = store.read(snapshot["id"])
+        validate_for_sending(draft)
+        if any(draft[key] != snapshot[key] for key in SNAPSHOT_KEYS):
+            raise ValueError("草稿已变化，请重新请求发送并确认；本次未发送")
         settings = load_settings()
         message = build_message(snapshot, settings)
         smtp_deliver(message, settings, connect)
         sent = store.mark_sent(snapshot, str(message["Message-ID"]))
-        return dict(sent, display=(
-            f"Draft #{sent['id']} 已发送。\n\nTo: {sent['to']}\nSubject: {sent['subject']}\n\n{sent['body']}"))
+        return dict(sent, display=f"Draft #{sent['id']} 已发送。")

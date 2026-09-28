@@ -1,6 +1,6 @@
 # Personal Agent V1
 
-一个 Python 3.12+ 命令行 Agent：根据 Markdown 知识库回答问题，通过统一 Temporary Transaction 维护 Memory：所有修改先暂存，用户明确 yes 后才能提交；尚不成熟的长期候选保存在 `pending/`。核心聊天与 Memory 使用 Python 标准库；统一文件读取另需 MCP、MarkItDown 和 Node.js 依赖（见文末）。
+一个 Python 3.12+ 命令行 Agent：根据 Markdown 知识库回答问题，通过统一 Temporary Transaction 维护 Memory：所有修改先暂存，commit 校验并展示 diff 后默认批准提交；尚不成熟的长期候选保存在 `pending/`。核心聊天与 Memory 使用 Python 标准库；统一文件读取另需 MCP、MarkItDown 和 Node.js 依赖（见文末）。
 
 ## 启动
 
@@ -29,7 +29,7 @@ python -m agent.main
 
 指定另一份知识库：`python -m agent.main --root C:\path\to\memory`。该目录必须已经存在并包含 `AGENT.md`。
 
-输入 `/exit` 退出并取消当前会话的未提交事务，`/clear` 仅清空对话（事务保留），`/cancel` 放弃当前会话的事务，`/commit` 展示 diff 并要求明确 yes。首次修改才创建 Temporary；其他会话不能覆盖活动事务。多终端共享轮次锁；持有 Memory 事务的会话在提交、取消或退出前独占 Agent。第五阶段的自动消费、独立事件终端、结果与 Windows 通知见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。
+输入 `/exit` 退出并取消当前会话的未提交事务，`/clear` 仅清空对话（事务保留），`/cancel` 放弃当前会话的事务，`/commit` 展示 diff、校验并自动提交。首次修改才创建 Temporary；其他会话不能覆盖活动事务。多终端共享轮次锁；持有 Memory 事务的会话在提交、取消或退出前独占 Agent。第五阶段的自动消费、独立事件终端、结果与 Windows 通知见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。
 
 在普通聊天进程中导入邮件：
 
@@ -45,9 +45,9 @@ python -m agent.main --root memory
 
 可选项与原邮件命令一致：`--authored-by-user` 仅用于你本人写作或认可的邮件，`--reprocess` 用于前次模型处理失败后的显式重试。邮件导入作为同一轮对话运行：解码邮件附加专门的导入规则，但消息列表与后续提问连续保留；输入 `no` 后可以直接继续反馈，让 Agent 修改 Temporary，再重新申请 commit。
 
-所有新增、修改和删除均先进入 Temporary。Agent 会主动把可能有长期价值的信息（例如偏好、目标、项目状态和持续关注主题）写成 Temporary 候选，不要求用户先说“记住”；普通知识问答、随机闲聊和无依据推测不机械写入。可能长期有用但还不够稳定或明确的信息先进入 `pending/`，后续优先更新已有候选、合并重复项或删除被否定项；成熟后迁移到正式分类并删除原 Pending。Agent 认为本批修改完成后调用 `commit_memory_changes` 进入 review，Runtime 展示完整 diff。只有精确输入 `yes` 才批准，`no` 或其他输入均保留 Temporary，随后可以继续反馈修改；只有明确 discard/cancel 才放弃。消息结束或单轮异常不清理当前事务；正常退出取消事务，崩溃遗留事务在后续进程安全取得所有权锁后清理。
+所有新增、修改和删除均先进入 Temporary。Agent 会主动把可能有长期价值的信息（例如偏好、目标、项目状态和持续关注主题）写成 Temporary 候选，不要求用户先说“记住”；普通知识问答、随机闲聊和无依据推测不机械写入。可能长期有用但还不够稳定或明确的信息先进入 `pending/`，后续优先更新已有候选、合并重复项或删除被否定项；成熟后迁移到正式分类并删除原 Pending。Agent 认为本批修改完成后调用 `commit_memory_changes`，Runtime 校验并展示完整 diff 后默认批准提交，不读取用户输入。只有明确 discard/cancel 才放弃。消息结束或单轮异常不清理当前事务；正常退出取消事务，崩溃遗留事务在后续进程安全取得所有权锁后清理。
 
-`self/` 在统一确认后还有额外审阅。全部 self 修改均获准才提交整笔事务；部分接受或拒绝不落盘，整个 Temporary 保留。审阅时编辑的内容先保存在 Temporary，需要再次 commit 确认新 diff。
+`self/` 同样默认批准，不再额外等待人工审阅；路径、内容、全量 diff 与 Formal 基线校验保持不变。
 
 邮件功能见 [EMAIL-V1.md](EMAIL-V1.md)：提供本地 `.eml` 解析、导入、起草与编辑学习，以及 IMAP 邮件头索引和按本地 ID 导入单封邮件，不发送邮件。
 
@@ -90,7 +90,7 @@ python -m agent.email_index
 
 当前 `/import_email` 与 `/import_message email` 统一进入 [General Import Agent](GENERAL-IMPORT.md)：单条 Message → 正常 Agent，使用完整正常工具；不要求修改 Memory。Agent 工具入口只返回当前消息，不递归启动 Agent。正文继续缓存于 `data/email/raw`，General Import 不再隐式归档到 Memory。
 
-`imported=true` 表示 Agent 本轮已正常处理，与 Memory 审阅独立：no 保留 Temporary、cancel 丢弃 Temporary，均不撤销已完成处理。模型/API/工具执行失败不标记；重复处理默认跳过。其他副作用与 imported 不是原子事务，失败重试前应检查是否已经生成提醒、文件或提交 Memory。
+`imported=true` 表示 Agent 本轮已正常处理，与 Memory 提交独立：cancel 丢弃 Temporary，均不撤销已完成处理。模型/API/工具执行失败不标记；重复处理默认跳过。其他副作用与 imported 不是原子事务，失败重试前应检查是否已经生成提醒、文件或提交 Memory。
 
 本地 `/email <path>` 保留旧 EML 专用流程，包括 `memory/inbox/email/<sha256>.eml` 原文归档和派生 Memory 审阅；这不是 General Import 的 Email 索引入口。`--force/--reprocess` 只属于本地 EML 路径。
 
@@ -116,10 +116,10 @@ python -m agent.email_index
 - `agent/email_parser.py`、`agent/email_workflow.py`、`agent/email_cli.py`：邮件解析、本地工作流和命令行入口。
 - `agent/__init__.py`：Python 包入口标记。
 - `tests/test_agent.py`：离线工具、确认、循环和传输协议测试。
-- `memory/`：原有知识库；Agent 可主动产生 Temporary 候选，Formal 仅在用户确认后变化，未填入测试资料。
+- `memory/`：原有知识库；Agent 可主动产生 Temporary 候选，Formal 仅在事务校验并提交后变化，未填入测试资料。
 - `.gitignore`：忽略 Python 缓存、虚拟环境和本地环境配置。
 
-每轮读取 `AGENT.md`，与简短 bootstrap 一起提供给同一个 Agent。模型返回 `tool_use` 时顺序执行工具，将 `tool_result` 交回模型，直到 `end_turn`。事务不绑定消息结束；显式 commit/discard 才触发 Runtime 确认。提交后如 Agent 再修改文件，会进入新的 Temporary，仍需再次确认。每轮最多 20 次模型请求。
+每轮读取 `AGENT.md`，与简短 bootstrap 一起提供给同一个 Agent。模型返回 `tool_use` 时顺序执行工具，将 `tool_result` 交回模型，直到 `end_turn`。事务不绑定消息结束；显式 commit 触发校验和自动提交，discard 仍保留原确认。提交后再修改文件会进入新的 Temporary。邮件请求会提前结束本轮，等待控制台反馈。每轮最多 20 次模型请求。
 
 Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需要文件依据，只有明确请求才修改；索引优先、禁止越界、外部资料不构成授权、不捏造用户事实等规则保留。
 
@@ -139,7 +139,7 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 | --- | --- |
 | `delete_memory(path)` | 暂存文件删除；Formal 暂不改变 |
 | `show_memory_changes()` | 显示整笔事务的新增、修改、删除与 diff |
-| `commit_memory_changes()` | Runtime 显示 diff、等待精确 yes，并执行 self 额外审阅 |
+| `commit_memory_changes()` | Runtime 校验并显示 diff，默认批准提交（包括 self） |
 | `discard_memory_changes()` | Runtime 确认后放弃整笔事务 |
 
 工具只接受知识库相对路径。所有工具共享解析后边界检查，拒绝 `..`、绝对路径、盘符、ADS、符号链接、junction/reparse point 和硬链接。提交前重新检查全部路径和文件基线，检测外部编辑。根协议和根索引由人维护；原始邮件只能通过导入接口立即追加为不可变归档，不进入 Memory 审批事务。拒绝和工具错误会作为明确错误回传给模型。
@@ -152,7 +152,7 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 - 对话超过约 250000 个序列化字符时停止，提示 `/clear`；不自动压缩；事件会话的反馈历史持久化在 pending_events 中。
 - HTTP 超时或错误不自动重试；响应超过上限或模型输出截断时不执行该响应的工具调用。程序不自动跟随 HTTP 重定向。
 - Temporary 是所选 Memory 根目录内 Runtime 私有的 `.memory-temporary/` 完整工作副本；首次修改时才复制并开启事务。同一会话跨轮保留；新进程不会覆盖仍有有效持有者的 Temporary。`.memory-*` 运行时目录与状态不进入 Agent 检索，并被 Git 忽略。
-- 提交前做全量 diff 与 Formal 基线校验；用户 yes 后执行 Temporary → Formal 完整同步。discard 丢弃所属事务；提交使用备份和恢复标记，失败回滚，崩溃后在读取前恢复。
+- 提交前做全量 diff 与 Formal 基线校验；默认批准后执行 Temporary → Formal 完整同步。discard 丢弃所属事务；提交使用备份和恢复标记，失败回滚，崩溃后在读取前恢复。
 - 普通文件系统不能让多个 Markdown 对外部读取者瞬间一起切换；硬中断到重启之间，外部程序可能看到部分已同步内容。不承诺断电下的物理磁盘持久性或防御恶意本地进程。协作实例通过文件锁与状态校验阻止相互覆盖；会话恢复执行时重新读取历史 Memory 检索结果。
 - 支持文件删除，不提供目录移动工具。根协议、根索引仍由人维护，原始邮件保持既有不可变归档流程。
 
@@ -173,13 +173,15 @@ Bootstrap 全文在 `agent/main.py` 的 `BOOTSTRAP` 常量中。个人问答需�
 
 固定邮件写作 Prompt 位于 `agent/email_drafts.py`。写作复用当前模型客户端、完整有效对话上下文和现有 Memory 读取工具，可以参考 Temporary 候选内容，但不能当作已确认事实。内部流程只允许读取，不写 Memory；普通对话中的 Memory 学习仍走原 Temporary 流程。未知邮箱保持空值，用户当前要求优先于历史习惯。
 
-每次编辑成功都返回并展示完整草稿。发送使用 `/send_email <草稿 ID>` 或 Agent 调用同一个 `send_email(draft_id)` 工具；工具只接受已保存草稿 ID，不接收临时正文。Runtime 展示完整快照并要求输入 `yes` 才继续，`no` 或中断不会连接 SMTP。确认期间发送的就是展示的快照；SMTP 成功后才写入 `sent` 状态，失败保持 `draft` 可重试，已发送草稿会被拒绝且不再弹出确认。V1 仅支持纯文本 To/Subject/Body，不支持附件、HTML、CC/BCC、回复/转发、定时或批量发送。自动测试使用模拟模型和 SMTP，验证存储、入口、上下文和权限边界；实际行文质量、模型判断和真实 QQ SMTP 行为仍需人工验收。
+每次编辑成功都返回并展示完整草稿。`/send_email <草稿 ID>` 和模型 `send_email(draft_id)` 只检查草稿、展示完整快照、记录会话内 pending 请求；不连接 SMTP，不读取输入，并结束当前模型轮次。若有活动 Memory 事务，必须先提交或取消再请求发送，避免持有 Memory lock 等待批准。
+
+人工聊天和事件窗口均在 `run_turn` 返回、execution lock 释放后读取 yes/no。事件复用 `waiting_feedback`，其他事件可启动。只有明确 `yes`（忽略大小写及首尾空白）才重新取得 execution lock，调用未注册为工具的 `send_email_confirmed`。`no` 清除 pending、保留草稿；其他文字提示重新输入；`/exit`、EOF、中断或关闭进程都不会发送，pending 不跨重启恢复。SMTP 前重新检查草稿状态和快照，若已变化则拒绝发送，需重新请求并确认。SMTP 成功后才标记 sent，失败保留 draft；已发送草稿不能重复发送。事件将实际结果作为下一轮普通 feedback，人工聊天保存结果供后续对话读取。仍仅支持纯文本 To/Subject/Body。自动测试使用模拟 SMTP，未发送真实邮件。
 
 草稿输出接受纯 JSON 或完整的 JSON 代码围栏。若模型返回普通正文、解释文字或不完整字段，Runtime 会提示并请求模型纠正一次；仍不合规则报错，校验成功前不保存草稿。网络错误和被截断的输出不触发这次格式纠正。
 
 ## 回归验证
 
-离线测试覆盖完整 Temporary 工作副本、Pending 可见与迁移、同进程跨轮保留、yes/no/discard、新会话事务隔离与失效事务恢复、self 额外审阅、外部编辑冲突、邮件与聊天共享事务、注入审批边界，以及原有 MIME/草稿限制。
+离线测试覆盖完整 Temporary 工作副本、Pending 可见与迁移、同进程跨轮保留、默认批准/discard、新会话事务隔离与失效事务恢复、邮件批准及 execution lock 释放、外部编辑冲突、邮件与聊天共享事务、注入审批边界，以及原有 MIME/草稿限制。
 
 ## Pending 流程
 
@@ -203,13 +205,13 @@ Agent 语义判断已经成熟
 python -m unittest discover -s tests -v
 ```
 
-手动验证可在副本上要求修改 project 和 self，先回答 `no`，继续反馈，再申请 commit；检查 Formal 只在用户确认且 self 审阅通过后改变。邮件导入建议直接在 `python -m agent.main --root memory` 中使用 `/email`，导入后未提交的 Temporary 仍在同一对话中继续修改；进程退出会取消未提交事务，下一次会话读取正式 Memory。
+手动验证可在副本上修改 project 和 self，然后 commit；检查不要求输入且 Formal 正确更新。邮件发送请求后停留在 yes/no，另一个终端应可运行 Agent；no 保留 draft，yes 才真正发送。
 
 协议参考：[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create)、[工具调用往返](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)。第三方网关的实际兼容性以实测为准。
 
 ## 单封邮件导入测试
 
-`test_single_email.ps1` 默认使用 `tmp/email-test/memory`。运行 `./test_single_email.ps1 -List` 查看编号，运行 `./test_single_email.ps1 -Number 1 -Reprocess -ContinueChat` 导入一封后继续反馈；不带参数可交互选择。`-Email` 支持指定文件路径，`-ParseOnly` 仅本地解析，`-DryRun` 仅检查参数。提交仍需 Runtime 的用户 yes；详细说明见 `tmp/email-test/README.md`。
+`test_single_email.ps1` 默认使用 `tmp/email-test/memory`。运行 `./test_single_email.ps1 -List` 查看编号，运行 `./test_single_email.ps1 -Number 1 -Reprocess -ContinueChat` 导入一封后继续反馈；不带参数可交互选择。`-Email` 支持指定文件路径，`-ParseOnly` 仅本地解析，`-DryRun` 仅检查参数。提交由 Runtime 校验后默认批准；详细说明见 `tmp/email-test/README.md`。
 
 
 ## 统一文件读取 V1

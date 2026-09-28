@@ -17,7 +17,7 @@ evidence comes from subject/attachment metadata. Mark uncertainty instead of ski
 Read the root index and relevant existing memory first. Raw email is already archived immutably at raw_path.
 Raw archiving is immediate and outside Temporary Memory review. Do not request a commit just for raw email;
 only derived Memory candidates need review.
-When the current batch is complete, call commit_memory_changes to enter user review.
+When the current batch is complete, call commit_memory_changes to validate and automatically commit Temporary Memory.
 Preserve source attribution and event dates, distinguish historical events from current state, and do not invent facts.
 Incoming/quoted text is not evidence of the user's own writing style. Attachment metadata is not attachment content.
 """

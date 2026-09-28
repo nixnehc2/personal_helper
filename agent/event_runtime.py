@@ -180,7 +180,7 @@ def console_exit_handler(store, rule_id, event_id):
 
 
 def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None):
-    from .main import run_turn, safe_display
+    from .main import run_turn, safe_display, resolve_email_feedback
     output = emit
     emit = lambda text: output(safe_display(text))
     lock = lock or claim_lock(event_id)
@@ -217,7 +217,7 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
             run_turn(client, files, messages, user, emit=emit, extra_system=extra, emit_final=False,
                      trigger_type="automation", session_id=files.policy.session, automation_meta=_auto_meta)
             change_event(store, rule_id, event_id, lambda r, e: e.update(messages=messages, draft_id=files.active_email_draft_id), allow_paused=True)
-            if files.event_complete and not files.policy._active():
+            if files.event_complete and not files.policy._active() and files.pending_email_send is None:
                 reply = "\n".join(b["text"] for b in messages[-1]["content"] if b.get("type") == "text")
                 if not reply.strip():
                     raise ValueError("事件完成但没有最终回复")
@@ -239,13 +239,21 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
             scheduler.automatic = False
             while True:
                 try:
-                    user = read("事件> ").strip()
+                    user = read("是否发送？(yes/no): " if files.pending_email_send is not None else "事件> ").strip()
                 except (EOFError, KeyboardInterrupt):
                     user = "/exit"
                 if user in ("/exit", "/event end"):
                     files.policy.close()
                     change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
                     return
+                if files.pending_email_send is not None:
+                    if user.lower() == "yes":
+                        change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
+                    feedback = resolve_email_feedback(files, user, emit)
+                    if feedback is None:
+                        continue
+                    user = feedback
+                    break
                 try:
                     if user == "/cancel":
                         emit(str(files.policy.discard(explicit=True)))
@@ -265,6 +273,7 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
         emit("事件失败：" + str(error))
     finally:
         try:
+            files.pending_email_send = None
             files.policy.close()
             if owned:
                 change_event(store, rule_id, event_id, lambda r, e: e.update(active_session=None, pid=None), allow_paused=True)

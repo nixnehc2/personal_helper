@@ -299,6 +299,70 @@ class EventTests(unittest.TestCase):
             return "/exit"
         self.run_event([reply("请补充")], read)
 
+    def test_email_approval_wait_allows_new_event_and_execution(self):
+        from agent.email_drafts import DraftStore
+        self.store.manage("create", rule=fixtures.timed("once", at=fixtures.NOW.isoformat()))
+        check_once(self.store, fixtures.NOW)
+        with patch("agent.email_drafts.DRAFTS_PATH", self.path.parent / "drafts"), patch("agent.email_send.send_email_confirmed", return_value=dict(status="sent", display="sent")) as send:
+            DraftStore().save(dict(to="a@example.test", subject="test", body="body"), None)
+            def read(prompt):
+                self.assertIn("yes/no", prompt)
+                self.assertEqual(self.event()["phase"], "waiting_feedback")
+                send.assert_not_called()
+                other = FileTools(self.root)
+                with other.policy.scheduler.turn(lambda _: None):
+                    pass
+                other.policy.close()
+                with patch("agent.event_runtime.launch", return_value=Mock(pid=77)) as start:
+                    tick(self.store, self.files)
+                    self.assertEqual(start.call_count, 1)
+                # Execute Event B while A is still inside its input callback.
+                rule_b, event_b = next((r, e) for r, e in events(self.store) if e["event_id"] != self.event_id)
+                files_b = FileTools(self.root)
+                client_b = Mock(complete=Mock(return_value=call("complete_event", reply="B completed")))
+                run_event(client_b, files_b, self.store, rule_b["id"], event_b["event_id"], event_b.get("active_session"), emit=lambda _: None, read=lambda _: "/exit")
+                client_b.complete.assert_called_once()
+                self.assertFalse(any(e["event_id"] == event_b["event_id"] for r, e in events(self.store)))
+                return "yes"
+            def confirmed(snapshot):
+                self.assertEqual(self.event()["phase"], "running")
+                lock = OSLock(RUNTIME / "execution.lock")
+                acquired = lock.acquire()
+                lock.release()
+                self.assertFalse(acquired)
+                return dict(status="sent", display="sent")
+            send.side_effect = confirmed
+            self.run_event([call("send_email", draft_id=1), call("complete_event", reply="sent")], read)
+            self.assertFalse([e.get("last_error") for r, e in events(self.store) if e.get("last_error")])
+            send.assert_called_once()
+        self.assertIsNone(self.files.pending_email_send)
+
+    def test_email_no_and_invalid_feedback_never_send(self):
+        from agent.email_drafts import DraftStore
+        answers = iter(["please send", "no"])
+        with patch("agent.email_drafts.DRAFTS_PATH", self.path.parent / "drafts"), patch("agent.email_send.smtp_deliver") as send:
+            DraftStore().save(dict(to="a@example.test", subject="test", body="body"), None)
+            def read(prompt):
+                self.assertEqual(self.event()["phase"], "waiting_feedback")
+                self.assertIsNotNone(self.files.pending_email_send)
+                return next(answers)
+            client = self.run_event([call("send_email", draft_id=1), call("complete_event", reply="cancelled")], read)
+            send.assert_not_called()
+            self.assertEqual(DraftStore().read(1)["status"], "draft")
+            self.assertEqual(client.complete.call_count, 2)
+        self.assertIsNone(self.files.pending_email_send)
+        self.assertEqual(events(self.store), [])
+
+    def test_email_approval_exit_preserves_draft(self):
+        from agent.email_drafts import DraftStore
+        with patch("agent.email_drafts.DRAFTS_PATH", self.path.parent / "drafts"), patch("agent.email_send.smtp_deliver") as send:
+            DraftStore().save(dict(to="a@example.test", subject="test", body="body"), None)
+            self.run_event([call("send_email", draft_id=1)])
+            send.assert_not_called()
+            self.assertEqual(DraftStore().read(1)["status"], "draft")
+        self.assertIsNone(self.files.pending_email_send)
+        self.assertTrue(self.event()["suspended"])
+
     def test_completion_tool_not_available_to_nested_email_agent(self):
         self.files.event_session = True
         self.assertIn("complete_event", [t["name"] for t in self.files.tool_specs])
