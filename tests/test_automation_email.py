@@ -227,8 +227,10 @@ from agent.automations import AutomationStore
 from agent.automation_checker import check_once
 from datetime import datetime
 import sys,json
+from pathlib import Path
+base=Path(sys.argv[1]).parent
 with patch('agent.automation_sources.update_email_index',return_value=json.loads(sys.argv[3])):
- result=check_once(AutomationStore(sys.argv[1],json.loads(sys.argv[2])),datetime.fromisoformat(sys.argv[4]))
+ result=check_once(AutomationStore(sys.argv[1],json.loads(sys.argv[2])),datetime.fromisoformat(sys.argv[4]), qq_db_path=base / "qq/messages.sqlite3", qq_whitelist_path=base / "qq/sync_conversations.json")
 print(json.dumps(result))
 """
         result = json.loads(subprocess.check_output([sys.executable, "-c", code, str(self.path),

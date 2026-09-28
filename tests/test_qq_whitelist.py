@@ -1,14 +1,13 @@
-"""Synthetic-only coverage of human selection and checker startup sync."""
-from contextlib import closing, nullcontext, redirect_stdout
+"""Synthetic-only coverage of human selection and stable sync filtering."""
+from contextlib import closing, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from agent import automation_checker as checker, qq_sync_selector as selector
+from agent import qq_sync_selector as selector
 from agent.qq_conversations import build_conversation_list
 from agent.qq_sync import QQStore, update_qq
 from test_qq_sync import Client, raw
@@ -122,53 +121,6 @@ class WhitelistTests(unittest.TestCase):
                     selector.save_whitelist([], self.path)
             self.assertEqual(self.path.read_bytes(), original)
             self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
-
-    def test_missing_empty_and_invalid_never_sync(self):
-        for content in (None, '{"conversations": []}', '{', '{}', '{"conversations": [1]}', '{"conversations": [{"type":"group","id":true}]}', '{"conversations": [{"type":"private","id":""}]}'):
-            if content is not None:
-                self.path.write_text(content, encoding="utf-8")
-            with patch("agent.qq_sync.update_qq") as sync, self.assertLogs(level="INFO"):
-                checker.qq_startup_sync(whitelist_path=self.path)
-            sync.assert_not_called()
-
-    def test_startup_connection_failure_contained(self):
-        self.configure("1")
-        for failure in (RuntimeError("offline"), dict(failed=1, errors=["offline"])):
-            kwargs = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
-            with patch("agent.qq_sync.update_qq", **kwargs) as sync, self.assertLogs(level="WARNING"):
-                checker.qq_startup_sync(whitelist_path=self.path)
-            self.assertEqual(sync.call_args.kwargs["allowed_conversations"], {("group", "100")})
-
-    def test_loop_once_after_lock_and_once_mode_never_syncs(self):
-        events = []
-        from contextlib import contextmanager
-        @contextmanager
-        def lock(store):
-            events.append("lock")
-            yield
-        for once in (False, True):
-            events.clear()
-            with patch.object(checker, "AutomationStore", return_value=SimpleNamespace(settings={})), patch.object(checker, "loop_lock", side_effect=lock), patch.object(checker, "qq_startup_sync", side_effect=lambda _: events.append("qq")) as sync, patch.object(checker, "check_once", side_effect=lambda _: events.append("check") or dict(failed=[], display="ok")) as check, patch.object(checker.time, "sleep", side_effect=[None, KeyboardInterrupt]), patch("sys.argv", ["checker"] + (["--once"] if once else [])):
-                self.assertEqual(checker.main(), 0)
-            self.assertEqual(events, ["check"] if once else ["lock", "qq", "check", "check"])
-
-    def test_lock_failure_prevents_startup(self):
-        with patch.object(checker, "AutomationStore", return_value=SimpleNamespace(settings={})), patch.object(checker, "loop_lock", side_effect=RuntimeError("locked")), patch.object(checker, "qq_startup_sync") as sync, patch("sys.argv", ["checker"]):
-            self.assertEqual(checker.main(), 1)
-        sync.assert_not_called()
-
-    def test_failed_or_unconfigured_startup_still_runs_loop_without_retry(self):
-        for mode in ("missing", "empty", "invalid", "offline"):
-            if mode == "empty":
-                selector.save_whitelist([], self.path)
-            elif mode == "invalid":
-                self.path.write_text("{", encoding="utf-8")
-            elif mode == "offline":
-                self.configure("1")
-            with patch.object(selector, "WHITELIST_PATH", self.path), patch.object(checker, "AutomationStore", return_value=SimpleNamespace(settings={})), patch.object(checker, "loop_lock", return_value=nullcontext()), patch("agent.qq_sync.update_qq", side_effect=RuntimeError("offline")) as sync, patch.object(checker, "check_once", return_value=dict(failed=[], display="ok")) as check, patch.object(checker.time, "sleep", side_effect=[None, KeyboardInterrupt]), patch("sys.argv", ["checker"]):
-                self.assertEqual(checker.main(), 0)
-            self.assertEqual(check.call_count, 2)
-            self.assertEqual(sync.call_count, 1 if mode == "offline" else 0)
 
     def test_shared_discovery_preserves_partial_sync_failure_reporting(self):
         from agent.qq_client import QQClientError

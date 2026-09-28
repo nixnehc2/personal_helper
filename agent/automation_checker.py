@@ -11,6 +11,7 @@ import time
 
 from .automations import AutomationStore, SCHEMA
 from .automation_triggers import instant
+from .qq_sync_schedule import check_qq_sync_due
 
 
 def stamp(value):
@@ -25,7 +26,8 @@ def connect(store):
     return db
 
 
-def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=None):
+def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=None,
+               qq_db_path=None, qq_whitelist_path=None):
     store = store or AutomationStore()
     now = instant((now or store.clock()).isoformat())
     tolerance = float(tolerance_seconds if tolerance_seconds is not None else
@@ -72,6 +74,7 @@ def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=No
             except Exception as record_error:
                 failure["record_error"] = str(record_error)
             result["failed"].append(failure)
+    check_qq_sync_due(store.settings, now, qq_db_path, qq_whitelist_path)
     result["mailbox_syncs"] = [sync["sync_summary"] for sync in sources["email"].synced.values()
                                if isinstance(sync, dict) and "sync_summary" in sync]
     result["display"] = (f"入队 {len(result['enqueued'])}；跳过 {len(result['skipped'])} 条规则；失败 {len(result['failed'])}\n"
@@ -120,42 +123,6 @@ def loop_lock(store, purpose="checker"):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def qq_startup_sync(config=None, whitelist_path=None):
-    """Best effort once per long-lived checker; never fall back to full sync."""
-    from .qq_sync_selector import load_whitelist
-    from .qq_sync import update_qq
-
-    try:
-        allowed = load_whitelist(whitelist_path)
-    except FileNotFoundError:
-        logging.warning("QQ sync whitelist not configured")
-        return
-    except Exception as error:
-        logging.warning("QQ startup sync skipped: invalid sync_conversations.json: %s", error)
-        return
-    if not allowed:
-        logging.info("[QQ] startup sync: no conversations selected")
-        return
-
-    def progress(event):
-        if event["event"] == "start":
-            logging.info("[QQ] selected %s conversations", event["total_conversations"])
-        elif event["event"] in ("conversation_start", "conversation_skipped"):
-            c = event["conversation"]
-            logging.info("[QQ] [%s:%s] %s%s", c["type"], c["id"], c["name"],
-                         " (persistent skip)" if event["event"] == "conversation_skipped" else "")
-
-    try:
-        logging.info("[QQ] startup sync")
-        result = update_qq(config=config, allowed_conversations=allowed, progress=progress)
-        if result["failed"]:
-            logging.warning("[QQ] startup sync failed: %s", "; ".join(result["errors"]))
-        else:
-            logging.info("[QQ] startup sync completed")
-    except Exception as error:
-        logging.warning("[QQ] startup sync failed: %s", error)
-
-
 def main():
     parser = argparse.ArgumentParser(description="前台时间/邮件检查器；仅入队，不执行任务")
     parser.add_argument("--interval", type=float, help="检查间隔秒数（默认配置或 10）")
@@ -172,7 +139,6 @@ def main():
             logging.info(result["display"])
             return int(bool(result["failed"]))
         with loop_lock(store):
-            qq_startup_sync(store.settings)
             logging.info("检查循环已启动；Ctrl+C 退出")
             while True:
                 try:

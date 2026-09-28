@@ -1,4 +1,4 @@
-"""Human-only CLI configuration of QQ startup sync; never an Agent tool."""
+"""Human-only CLI configuration of QQ automatic sync; never an Agent tool."""
 import json
 import os
 from pathlib import Path

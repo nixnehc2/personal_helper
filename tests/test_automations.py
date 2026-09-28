@@ -41,6 +41,12 @@ class AutomationsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "data/automations.sqlite3"
         self.store = AutomationStore(self.path, {"EMAIL_ACCOUNT": "me@example.com"}, lambda: NOW)
+        # Checker now polls QQ too; all fixtures remain isolated from personal data.
+        for target, value in (("agent.qq_sync.DB_PATH", self.path.parent / "qq/messages.sqlite3"),
+                              ("agent.qq_sync_selector.WHITELIST_PATH", self.path.parent / "qq/sync_conversations.json")):
+            guard = patch(target, value)
+            guard.start()
+            self.addCleanup(guard.stop)
 
     def create(self, rule=None):
         return self.store.manage("create", rule=rule or timed())

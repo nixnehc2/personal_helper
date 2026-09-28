@@ -313,7 +313,7 @@ python -m unittest discover -s tests
 
 ## 长期规则（第一阶段）
 
-通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则及新邮件并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。邮件规则首次成功同步建立基线，仅监控此后的新邮件。检查器不消费事件；聊天空闲时消费者自动启动独立 Windows 事件终端，完成后保存完整结果并提交通知。QQ 不作为 Automation 事件来源；长期 checker 启动时可按人工白名单同步一次 QQ，见 [QQ 启动同步与白名单](QQ-STARTUP-SYNC.md)。不接入开机自启。第五阶段用法与边界见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，消费流程见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)，邮件来源及验收见 [AUTOMATIONS-V4.md](AUTOMATIONS-V4.md)。
+通过对话或 `/automation` 命令保存和管理提醒、邮件监控规则；重启后仍保留。手动运行 `python -m agent.automation_checker` 可检查定时规则及新邮件并入队；`/automation check` 检查一次，`/automation pending [规则编号]` 查看事件，`/automation consume` 手动调用 Agent 并在终端展示回复。邮件规则首次成功同步建立基线，仅监控此后的新邮件。检查器不消费事件；聊天空闲时消费者自动启动独立 Windows 事件终端，完成后保存完整结果并提交通知。QQ 不作为 Automation 事件来源；每轮 checker 检查 QQ 持久化同步时间，到期才按人工白名单同步（默认 10 分钟，失败 1 分钟重试），见 [QQ 周期同步与白名单](QQ-STARTUP-SYNC.md)。不接入开机自启。第五阶段用法与边界见 [AUTOMATIONS-V5.md](AUTOMATIONS-V5.md)。规则配置见 [AUTOMATIONS-V1.md](AUTOMATIONS-V1.md)，调度语义见 [AUTOMATIONS-V2.md](AUTOMATIONS-V2.md)，消费流程见 [AUTOMATIONS-V3.md](AUTOMATIONS-V3.md)，邮件来源及验收见 [AUTOMATIONS-V4.md](AUTOMATIONS-V4.md)。
 
 ## QQ 第二阶段：纯文字同步
 

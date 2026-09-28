@@ -1,6 +1,7 @@
 """One-shot QQ sync. Message insertion and separate checkpoints commit together."""
 import json
 import logging
+import os
 from copy import deepcopy
 import sqlite3
 from dataclasses import asdict
@@ -24,6 +25,7 @@ class QQStore:
         db.execute("CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS checkpoints (scope TEXT PRIMARY KEY, message_id TEXT NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS conversation_states (scope TEXT PRIMARY KEY, state TEXT NOT NULL)")
+        db.execute("CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         return db
 
     def list(self, imported=None):
@@ -73,7 +75,7 @@ def update_qq(config=None, db_path=None, client=None, page_size=100, progress=No
         raise ValueError("QQ page_size 必须在 2~1000 之间")
     if client is None:
         from .llm import load_config
-        config = load_config() if config is None else config
+        config = {**os.environ, **load_config()} if config is None else config
         client = QQClient(config.get("QQ_API_URL", "http://127.0.0.1:3000"), config.get("QQ_ACCESS_TOKEN", ""))
     result = dict(scanned=0, text=0, added=0, duplicates=0, skipped=0, failed=0, errors=[])
     # Observation only: snapshots never share mutable objects with sync state.
@@ -233,6 +235,13 @@ def update_qq(config=None, db_path=None, client=None, page_size=100, progress=No
         report("error", error=result["errors"][-1])
     finally:
         db.close()
+    if allowed_conversations is None and not result["failed"]:
+        from .qq_sync_schedule import record_manual_success
+        try:
+            record_manual_success(config, db_path)
+        except Exception as exc:
+            result["failed"] += 1
+            result["errors"].append(f"QQ 同步时间保存失败: {exc}")
     result["display"] = ("QQ 同步完成" if not result["failed"] else "QQ 同步完成（存在失败，请重试）") + "\n" + "\n".join(
         f"{label}：{result[key]}" for label, key in (("扫描", "scanned"), ("纯文字", "text"),
         ("新增", "added"), ("重复", "duplicates"), ("跳过非文字", "skipped"), ("失败", "failed")))

@@ -41,7 +41,7 @@ class CheckerTests(unittest.TestCase):
         self.assertIsNone(self.row()["next_check_at"])
         self.assertEqual(self.row()["status"], "active")
         self.assertEqual(self.check(60)["enqueued"], [])
-        code = "from agent.automations import AutomationStore; from agent.automation_checker import check_once; import sys,json; print(json.dumps(check_once(AutomationStore(sys.argv[1], {}))))"
+        code = "from agent.automations import AutomationStore; from agent.automation_checker import check_once; import sys,json; from pathlib import Path; base=Path(sys.argv[1]).parent; print(json.dumps(check_once(AutomationStore(sys.argv[1], {}), qq_db_path=base / 'qq/messages.sqlite3', qq_whitelist_path=base / 'qq/sync_conversations.json')))"
         result = json.loads(subprocess.check_output([sys.executable, "-c", code, str(self.path)], text=True))
         self.assertEqual(result["enqueued"], [])
         self.assertEqual(len(pending(self.store)["events"]), 1)
