@@ -49,7 +49,7 @@ class IndexTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name) / "email/index.json"
+        self.path = Path(self.tmp.name) / "email/index.sqlite3"
         self.mailbox = Mailbox()
         self.mailbox.headers = dict(Mailbox.headers)
         self.mock = patch("agent.email_index.imaplib.IMAP4_SSL", return_value=self.mailbox)
@@ -65,7 +65,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(self.sync()["added"], 0)
         data = EmailIndex(self.path).read()
         data["emails"][0].update(imported=True, imported_at="2026-09-24")
-        self.path.write_text(json.dumps(data), encoding="utf-8")
+        EmailIndex(self.path).write(data)
         self.mailbox.headers[b"3"] = b"Message-ID: <three>\r\nSubject: special | <>& \"\r\n\r\n"
         result = self.sync()
         self.assertEqual([r["id"] for r in result["emails"]], [1, 2, 3])
@@ -108,13 +108,15 @@ class IndexTests(unittest.TestCase):
     def test_atomic_write_failure_and_corrupt_index(self):
         self.sync()
         before = self.path.read_bytes()
-        with patch("agent.email_index.os.replace", side_effect=OSError("disk error")):
+        with patch.object(EmailIndex, "_write_snapshot", side_effect=OSError("disk error")):
             with self.assertRaises(OSError): self.sync()
         self.assertEqual(self.path.read_bytes(), before)
         self.assertFalse(self.path.with_suffix(".lock").exists())
-        self.path.write_text("broken", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "索引格式损坏"): self.sync()
-        self.assertEqual(self.path.read_text(), "broken")
+        legacy = self.path.parent / "corrupt.json"
+        legacy.write_text("broken", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "索引格式损坏"):
+            EmailIndex(legacy).read()
+        self.assertEqual(legacy.read_text(), "broken")
 
     def test_empty_mailbox_initializes_and_lock_prevents_overwrite(self):
         self.mailbox.headers = {}

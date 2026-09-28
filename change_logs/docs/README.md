@@ -65,7 +65,7 @@ python -m agent.email_index
 
 私有 `config.local.json` 新增字符串字段：`EMAIL_ACCOUNT`、`EMAIL_AUTH_CODE`；可选 `EMAIL_IMAP_HOST`（默认 `imap.qq.com`）、`EMAIL_IMAP_PORT`（默认 `993`）、`EMAIL_FOLDER`（默认 `INBOX`）、`EMAIL_SMTP_HOST`（默认 `smtp.qq.com`）、`EMAIL_SMTP_PORT`（默认 `465`）。也支持同名环境变量，本地配置优先。QQ 邮箱需要开启 IMAP/SMTP，使用授权码登录。授权码不会进入工具返回值或模型消息。
 
-索引位于项目根目录的 `data/email/index.json`，与 Memory 独立且被 Git 忽略。默认同步收件箱；其他文件夹需通过私有配置选择，不自动遍历所有文件夹。索引包含递增 `id`、`imap_uid`、`message_id`、`subject`、`from`、`date`、`imported`、`imported_at`，另存邮箱/文件夹/UIDVALIDITY 用于隔离 UID。先按同邮箱同文件夹同 UIDVALIDITY 下的 UID 匹配，再按非空 Message-ID 匹配。服务器重置 UID 后仍可通过 Message-ID 保留本地 ID；缺失 Message-ID 时无法跨 UIDVALIDITY 识别原邮件。相同 Message-ID 视为同一封邮件。
+索引位于项目根目录的 `data/email/index.sqlite3`（首次访问自动迁移旧 `index.json`，原文件保留为迁移前备份），与 Memory 独立且被 Git 忽略。默认同步收件箱；其他文件夹需通过私有配置选择，不自动遍历所有文件夹。索引包含递增 `id`、`imap_uid`、`message_id`、`subject`、`from`、`date`、`imported`、`imported_at`，另存邮箱/文件夹/UIDVALIDITY 用于隔离 UID。先按同邮箱同文件夹同 UIDVALIDITY 下的 UID 匹配，再按非空 Message-ID 匹配。服务器重置 UID 后仍可通过 Message-ID 保留本地 ID；缺失 Message-ID 时无法跨 UIDVALIDITY 识别原邮件。相同 Message-ID 视为同一封邮件。
 
 新记录始终 `imported=false`、`imported_at=null`；重复同步保留两项状态和原 ID。远端删除的邮件保留历史索引，不复用编号；本阶段不跟踪删除状态，也不把既有 EML 归档自动标记为已导入。
 
@@ -336,7 +336,9 @@ python -m unittest discover -s tests
 详见 [统一 Message 流程与状态说明](MESSAGE-V3.md)。QQ 与 Email 共用以下命令：
 
 ```text
+/list_messages
 /list_messages qq
+/list_messages qq 20 20
 /list_messages email {"imported":false,"limit":20}
 /list_messages qq {"conversation":"group:123456","time_from":"2026-09-01T00:00:00+08:00","limit":10}
 /read_message qq <ID>
@@ -345,3 +347,5 @@ python -m unittest discover -s tests
 ```
 
 ID 在所有来源中唯一时可省略 source：`/import_message <ID>`。Agent 使用同名 `list_messages`、`read_message`、`import_message` 工具。查看不触发导入，只有用户明确选择后才调用导入；`/import_email` 是兼容入口。
+
+`list_messages(source=None, limit=20, offset=0)` 在 SQLite 内筛选、排序、分页，仅解析当前页。limit 为 1~100；offset 为非负 SQLite 整数。原 JSON 过滤条件命令继续支持。迁移与性能边界见 [Message 数据库分页](MESSAGE-V3.md#数据库分页与-email-迁移)。

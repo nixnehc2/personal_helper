@@ -2,8 +2,10 @@
 import copy
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
+import tempfile
 
 from .email_index import EmailIndex
 from .tools import TOOLS
@@ -25,6 +27,22 @@ to 是已知邮箱字符串或 null；subject 和 body 必须是字符串。不�
 class DraftStore:
     def __init__(self, path=None):
         self.path = Path(path) if path is not None else DRAFTS_PATH
+
+    def _write_json(self, draft):
+        """Drafts remain JSON; they no longer borrow the Email message store's writer."""
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.path,
+                                             prefix='.index-', suffix='.tmp', delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(draft, stream, ensure_ascii=False, indent=2)
+                stream.write('\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path / f"{draft['id']}.json")
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def read(self, draft_id):
         if type(draft_id) is not int or draft_id <= 0:
@@ -63,14 +81,14 @@ class DraftStore:
             now = datetime.now(timezone.utc).isoformat()
             draft = dict(id=draft_id, **content, status="draft",
                          created_at=previous["created_at"] if previous else now, updated_at=now)
-            EmailIndex(self.path / f"{draft_id}.json").write(draft)
+            self._write_json(draft)
             return draft
 
     def mark_sent(self, snapshot, message_id):
         """Record the exact user-approved snapshot; caller must hold the store lock."""
         now = datetime.now(timezone.utc).isoformat()
         sent = dict(snapshot, status="sent", sent_at=now, sent_message_id=message_id, updated_at=now)
-        EmailIndex(self.path / f"{snapshot['id']}.json").write(sent)
+        self._write_json(sent)
         return sent
 
 

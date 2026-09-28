@@ -22,7 +22,7 @@ class EmailEntrypointTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "memory"
         self.root.mkdir()
         (self.root / "AGENT.md").write_text("Test protocol", encoding="utf-8")
-        self.path = Path(self.tmp.name) / "data/email/index.json"
+        self.path = Path(self.tmp.name) / "data/email/index.sqlite3"
         self.files = FileTools(self.root, lambda changes: {}, lambda *args: "no")
         self.mailbox = Mailbox()
         self.mailbox.headers = dict(Mailbox.headers)
@@ -95,7 +95,7 @@ class EmailEntrypointTests(unittest.TestCase):
         self.chat()
         data = email_index.EmailIndex(self.path).read()
         data["emails"][0].update(imported=True, imported_at="2026-09-24")
-        self.path.write_text(json.dumps(data), encoding="utf-8")
+        email_index.EmailIndex(self.path).write(data)
         result, is_error = self.agent()
         self.assertFalse(is_error)
         self.assertEqual(result["added"], 0)

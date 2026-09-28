@@ -61,7 +61,7 @@ def email_row_to_message(row: dict[str, Any]) -> Message:
     Parameters
     ----------
     row:
-        A dict matching the schema stored in data/email/index.json.
+        A dict matching the EmailIndex row schema (including legacy JSON rows).
 
     Returns
     -------

@@ -1,5 +1,5 @@
 """Local metadata index. No EML download, model call, or Memory writes."""
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesHeaderParser
@@ -9,23 +9,25 @@ import os
 from pathlib import Path
 import re
 import ssl
-import tempfile
+import sqlite3
 import time
 
 from .llm import load_config
 
-INDEX_PATH = Path(__file__).resolve().parent.parent / "data/email/index.json"
+INDEX_PATH = Path(__file__).resolve().parent.parent / "data/email/index.sqlite3"
 
 
 class EmailIndex:
     def __init__(self, path=INDEX_PATH):
-        self.path = Path(path)
+        supplied = Path(path)
+        self.path = supplied.with_suffix('.sqlite3') if supplied.suffix == '.json' else supplied
+        self.legacy_path = self.path.with_suffix('.json')
 
-    def read(self):
-        if not self.path.exists():
+    def _read_legacy(self):
+        if not self.legacy_path.exists():
             return {"version": 1, "next_id": 1, "emails": []}
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.legacy_path.read_text(encoding="utf-8"))
             assert data["version"] == 1
             ids = set()
             for row in data["emails"]:
@@ -39,6 +41,45 @@ class EmailIndex:
             return data
         except (ValueError, KeyError, TypeError, AssertionError):
             raise ValueError("邮件索引格式损坏；已保留原文件，请修复后重试") from None
+
+    @staticmethod
+    def _write_snapshot(db, data):
+        db.execute('DELETE FROM email_messages')
+        db.executemany('INSERT INTO email_messages(id,payload) VALUES (?,?)',
+                       ((str(row['id']), json.dumps(row, ensure_ascii=False)) for row in data['emails']))
+        metadata = {key: value for key, value in data.items() if key != 'emails'}
+        db.execute('INSERT OR REPLACE INTO email_metadata VALUES (?,?)',
+                   ('snapshot', json.dumps(metadata, ensure_ascii=False)))
+
+    def connect(self):
+        """Migrate the old JSON once, transactionally; retain it as a backup."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self.path, timeout=30)
+        try:
+            if (db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_metadata'").fetchone()
+                    and db.execute("SELECT 1 FROM email_metadata WHERE key='snapshot'").fetchone()):
+                return db
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS email_messages (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS email_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            if db.execute("SELECT 1 FROM email_metadata WHERE key='snapshot'").fetchone() is None:
+                self._write_snapshot(db, self._read_legacy())
+            db.commit()
+            return db
+        except BaseException:
+            db.rollback()
+            db.close()
+            raise
+
+    def read(self):
+        # Synchronization keeps the established snapshot interface. Listing does not use it.
+        if not self.path.exists() and not self.legacy_path.exists():
+            return {"version": 1, "next_id": 1, "emails": []}
+        with closing(self.connect()) as db:
+            db.execute('BEGIN')
+            data = json.loads(db.execute("SELECT value FROM email_metadata WHERE key='snapshot'").fetchone()[0])
+            data['emails'] = [json.loads(row[0]) for row in db.execute('SELECT payload FROM email_messages ORDER BY rowid')]
+            return data
 
     @contextmanager
     def locked(self):
@@ -55,19 +96,9 @@ class EmailIndex:
             lock.unlink(missing_ok=True)
 
     def write(self, data):
-        """Atomic replacement; callers must hold locked()."""
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, prefix=".index-", suffix=".tmp", delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump(data, stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        """Atomic SQLite snapshot replacement; callers must hold locked()."""
+        with closing(self.connect()) as db, db:
+            self._write_snapshot(db, data)
 
     def get(self, id):
         if type(id) is not int or id <= 0:

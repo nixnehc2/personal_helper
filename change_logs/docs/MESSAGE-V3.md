@@ -5,7 +5,10 @@
 在已有 QQ 同步和 Email 索引基础上：
 
 ```text
+/list_messages
 /list_messages qq
+/list_messages qq 20 20
+/list_messages {"limit":20,"offset":20}
 /list_messages qq {"imported":false,"limit":20}
 /list_messages email {"conversation":"INBOX","limit":10}
 /list_messages qq {"conversation":"group:123456","time_from":"2026-09-01T00:00:00+08:00","time_to":"2026-09-30T23:59:59+08:00"}
@@ -18,7 +21,7 @@
 
 用户命令和 Agent 共用 `list_messages`、`read_message`、`import_message` 工具。仅查询或查看不导入，不修改 imported 或 Memory；用户明确选择一条消息并要求导入后，才运行导入流程。Email 查看完整正文可能下载并缓存 EML，但不会写 Memory 原文归档。
 
-列表按消息时间降序，时间相同按 ID 降序，未知时间最后；时间过滤使用带时区 ISO 8601，起止边界均包含，未知时间不会通过时间范围筛选。工具默认 20 条、最多 200 条。QQ conversation 支持会话 ID、`private:ID`/`group:ID` 或精确名称；Email 支持文件夹名或原始 Message-ID。推荐用带类型的 QQ 会话 ID 避免同名会话混淆。
+列表按消息时间降序，时间相同按 ID 降序，未知时间最后；时间过滤使用带时区 ISO 8601，起止边界均包含，未知时间不会通过时间范围筛选。工具支持 `source=None, limit=20, offset=0`，省略 source 查询所有来源；limit 必须为 1~100 的整数，offset 为非负整数（SQLite 上限 9223372036854775807）。非法参数返回错误。分页按此顺序跳过 offset 条后返回至多 limit 条，结果显示本页条数及 offset，不查询总数。QQ conversation 支持会话 ID、`private:ID`/`group:ID` 或精确名称；Email 支持文件夹名或原始 Message-ID。推荐用带类型的 QQ 会话 ID 避免同名会话混淆。
 
 QQ 摘要包含 Message ID、时间、会话名称及 ID、发送者名称及 QQ、文字预览、imported。完整查看和导入都保留完整文字及空格/换行。Email 摘要保留主题、发件人及文件夹。
 
@@ -70,3 +73,13 @@ Memory 提交与 Email JSON / QQ SQLite 不是跨存储原子事务。若正式�
 仅处理已经同步的 QQ 纯文字 Message。无 QQ 图片/文件/语音支持、无批量自动导入、无联系人画像、无群聊摘要；不增加后台同步、实时监听或 QQ Automation。原有其他来源 Automation 流程保留。
 
 测试使用隔离的合成消息、模拟模型/邮箱和真实 Memory 事务，不需要在线 NapCat 或真实 LLM。
+
+## 数据库分页与 Email 迁移
+
+QQ 继续使用 `data/qq/messages.sqlite3`；Email 使用独立的 `data/email/index.sqlite3`。首次访问旧 Email 索引时，事务性迁移同目录的 `index.json`，保留所有 ID、导入状态、同步进度与失败记录。旧 JSON 原样保留作迁移前备份；迁移成功后不再读取或更新它，后续数据以 SQLite 为准。仍接受旧 `.json` 路径参数，并定位到同名 `.sqlite3`。迁移失败会回滚，修复旧文件后可重试；首次迁移需要读取旧文件的全部内容。
+
+列表的来源选择、conversation/imported/时间筛选、排序及 `LIMIT ? OFFSET ?` 均在 SQLite 完成。省略来源时通过 `ATTACH` 查询两个独立存储，`UNION ALL` 后执行全局排序分页，不把各来源的前 offset 条加载到 Python。仅返回本页 payload 后才进行 JSON 解码和 Message 构造。
+
+完整正整数 ID 保持不变，SQL 使用十进制文本长度与字典序实现精确 ID 排序；时间标量函数只规范化日期字段，保留时区及微秒语义，不解析整条消息。跨来源时间和 ID 均相同的新情况按 source 名称升序稳定排列。未增加搜索索引，因此 SQLite 仍可能扫描、排序匹配记录，深 offset 也有扫描成本；本次保证限制消息载入量，不承诺查询耗时与总量无关。
+
+Email 同步与单条读取保留原快照接口；这次没有改变 `read_message` 的 ID 查找方式，也没有优化同步或单条读取的全量快照行为。邮件草稿仍保存为原来的 JSON 文件。

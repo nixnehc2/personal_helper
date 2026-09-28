@@ -234,7 +234,7 @@ class UnifiedMessageTests(unittest.TestCase):
         self.assertEqual(parse_tool_command('/import_message 1'),('import_message',{'id':1}))
         self.assertEqual(parse_tool_command('/read_message qq 1'),('read_message',{'source':'qq','id':1}))
         self.assertEqual(parse_tool_command('/list_messages qq {"imported":false,"limit":2}'),('list_messages',dict(source='qq',imported=False,limit=2)))
-        for text in ('/import_message','/import_message qq -1','/read_message 0','/list_messages','/list_messages qq []'):
+        for text in ('/import_message','/import_message qq -1','/read_message 0','/list_messages qq []'):
             with self.assertRaises(ValueError): parse_tool_command(text)
         client=ScriptClient([]); client.model='test'
         with patch('sys.argv',['agent.main']),patch('agent.main.FileTools',return_value=self.files),patch('agent.main.Client',return_value=client),patch('agent.main.load_config',return_value={'ANTHROPIC_AUTH_TOKEN':'test'}),patch('builtins.input',side_effect=['/list_messages qq','/read_message qq 1','/import_message qq 1','/exit']),redirect_stdout(StringIO()) as output:

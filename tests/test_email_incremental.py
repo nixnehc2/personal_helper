@@ -77,7 +77,7 @@ print(json.dumps({'mode':result['mode'],'fetched':result['fetched_header_count']
         self.assertEqual(result["success_count"], 105)
         self.assertEqual(result["skipped_count"], 100)
         self.assertEqual(self.progress()["max_uid"], 205)
-        self.assertNotIn("private", self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("private", json.dumps(EmailIndex(self.path).read()))
         self.mailbox.calls.clear()
         self.sync()
         self.assertEqual(self.fetches(), [])
@@ -98,7 +98,7 @@ print(json.dumps({'mode':result['mode'],'fetched':result['fetched_header_count']
         self.sync()
         before = self.path.read_bytes()
         self.mailbox.headers[b"3"] = b"bad header\r\n\r\n"
-        with patch("agent.email_index.os.replace", side_effect=OSError("disk full")):
+        with patch.object(EmailIndex, "_write_snapshot", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.sync()
         self.assertEqual(self.path.read_bytes(), before)
@@ -115,7 +115,7 @@ print(json.dumps({'mode':result['mode'],'fetched':result['fetched_header_count']
             row.pop("in_reply_to")
             row.pop("references")
         data["emails"][0].update(imported=True, imported_at="2026-09-24")
-        self.path.write_text(json.dumps(data), encoding="utf-8")
+        EmailIndex(self.path).write(data)
         self.mailbox.headers[b"1"] = b"Message-ID: <one>\r\nIn-Reply-To: <parent>\r\nReferences: <root>\r\n\r\n"
         self.mailbox.calls.clear()
         self.assertEqual(self.sync()["mode"], "full")
@@ -138,5 +138,5 @@ print(json.dumps({'mode':result['mode'],'fetched':result['fetched_header_count']
         data = EmailIndex(self.path).read()
         self.assertEqual(len(data["sync_progress"]), 4)
         data["sync_progress"][scope_key(fixtures.CONFIG)]["max_uid"] = "invalid"
-        self.path.write_text(json.dumps(data), encoding="utf-8")
+        EmailIndex(self.path).write(data)
         self.assertEqual(self.sync()["mode"], "full")

@@ -1,5 +1,7 @@
 """Source registry: storage, source preparation and formatting live behind one interface."""
 import os
+import json
+from contextlib import closing
 
 from .email_adapter import email_row_to_message, email_identity
 from .formatters import format_qq, view_email, summarize_email, summarize_qq
@@ -18,6 +20,22 @@ class EmailSource:
 
     def list(self):
         return [email_row_to_message(row) for row in self.store.read()["emails"]]
+
+    def listing_sql(self, alias):
+        if not self.store.path.exists() and not self.store.legacy_path.exists():
+            return None, None
+        with closing(self.store.connect()):
+            pass
+        return self.store.path, f"""SELECT 'email' AS source, id, payload,
+            message_time(json_extract(payload, '$.date'), 'email') AS stamp,
+            json_extract(payload, '$.imported') AS imported,
+            json_extract(payload, '$.folder') AS conversation1,
+            json_extract(payload, '$.message_id') AS conversation2,
+            NULL AS conversation3 FROM {alias}.email_messages"""
+
+    @staticmethod
+    def decode_listing(payload):
+        return email_row_to_message(json.loads(payload))
 
     def conversation_matches(self, message, conversation):
         return conversation in (message.content.get("folder"), message.content.get("message_id"))
@@ -62,6 +80,23 @@ class QQSource:
 
     def list(self):
         return self.store.list()
+
+    def listing_sql(self, alias):
+        if not self.store.path.exists():
+            return None, None
+        return self.store.path, f"""SELECT 'qq' AS source, id, payload,
+            message_time(json_extract(payload, '$.time'), 'qq') AS stamp,
+            json_extract(payload, '$.imported') AS imported,
+            CAST(json_extract(payload, '$.content.conversation.id') AS TEXT) AS conversation1,
+            json_extract(payload, '$.content.conversation.type') || ':' ||
+                json_extract(payload, '$.content.conversation.id') AS conversation2,
+            json_extract(payload, '$.content.conversation.name') AS conversation3
+            FROM {alias}.messages"""
+
+    @staticmethod
+    def decode_listing(payload):
+        from .models import Message
+        return Message(**json.loads(payload))
 
     def conversation_matches(self, message, conversation):
         chat = message.content["conversation"]

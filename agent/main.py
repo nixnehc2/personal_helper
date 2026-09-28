@@ -443,13 +443,29 @@ def parse_tool_command(user):
         return "update_qq", {}
     parts = user.split()
     if parts and parts[0] == "/list_messages":
-        # JSON keeps optional filters unambiguous without growing a separate CLI parser.
+        # Preserve JSON filters; positional pagination is a small convenience.
         args = user.split(maxsplit=2)
-        if len(args) < 2:
-            raise ValueError('用法：/list_messages <qq|email> [JSON过滤条件]')
-        filters = json.loads(args[2]) if len(args) == 3 else {}
-        if not isinstance(filters, dict) or "source" in filters:
-            raise ValueError("过滤条件必须是 JSON 对象，不能重复 source")
+        if len(args) == 1:
+            return "list_messages", {}
+        if args[1].startswith("{"):
+            filters = json.loads(user.split(maxsplit=1)[1])
+            if not isinstance(filters, dict):
+                raise ValueError("过滤条件必须是 JSON 对象")
+            return "list_messages", filters
+        filters = {}
+        if len(args) == 3:
+            if args[2].startswith(("{", "[")):
+                filters = json.loads(args[2])
+                if not isinstance(filters, dict) or "source" in filters:
+                    raise ValueError("过滤条件必须是 JSON 对象，不能重复 source")
+            else:
+                values = args[2].split()
+                if len(values) > 2:
+                    raise ValueError('用法：/list_messages [qq|email] [limit [offset] 或 JSON过滤条件]')
+                try:
+                    filters = dict(zip(("limit", "offset"), map(int, values)))
+                except ValueError:
+                    raise ValueError('limit 和 offset 必须是整数') from None
         return "list_messages", dict(filters, source=args[1])
     if parts and parts[0] in ("/import_message", "/read_message"):
         if len(parts) not in (2, 3) or not parts[-1].isascii() or not parts[-1].isdecimal() or int(parts[-1]) <= 0:
