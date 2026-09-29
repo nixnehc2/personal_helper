@@ -169,7 +169,7 @@ class AutomationsTests(unittest.TestCase):
             self.assertIn("error", files.execute("automation", dict(action="resume", id=1)))
             self.assertEqual(files.policy.changes, {})
             files.processing_eml = True
-            self.assertIn("error", files.execute("automation", dict(action="create", rule=timed())))
+            self.assertNotIn("error", files.execute("automation", dict(action="create", rule=timed())))  # processing_message no longer blocks automation
 
 
 if __name__ == "__main__":

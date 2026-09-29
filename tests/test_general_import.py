@@ -126,8 +126,10 @@ class GeneralImportTests(unittest.TestCase):
         self.save(fixture.message(2))
         client = ScriptClient([[('import_message', dict(source='qq', id=1)), ('import_message', dict(source='qq', id=2))]])
         result = run_turn(client, self.files, [], '分别处理明确选择的 qq 1 和 qq 2', emit=lambda _: None)
-        self.assertEqual(len(result['message_imports']), 2)
-        self.assertTrue(all(m.imported for m in self.store.list()))
+        self.assertEqual(len(result['message_imports']), 1)
+        self.assertTrue(self.store.get(1).imported)
+        self.assertFalse(self.store.get(2).imported)
+        self.assertTrue(any('error' in str(r) for r in client.tool_results))
 
     def test_repeated_already_processed_tool_call_is_idempotent(self):
         self.execute()

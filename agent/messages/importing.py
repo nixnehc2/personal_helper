@@ -48,6 +48,9 @@ class ImportSession:
         if key in self.pending:
             return dict(id=id, source=message.source, status="processing", imported=False,
                         note="该消息已在当前轮加载，请继续处理已有内容")
+        if self.pending:
+            return dict(id=id, source=message.source, status='rejected',
+                        imported=False, error='当前 Agent 轮次已经导入一条 Message，不允许继续导入其他 Message；如需历史上下文请使用 list_messages/search_messages/read_message')
         with ExitStack() as held:
             held.enter_context(selected.lock(id))
             message = selected.get(id)

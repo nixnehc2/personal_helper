@@ -154,7 +154,7 @@ class DraftTests(unittest.TestCase):
         run_turn(client, self.files, [], "帮我写邮件", emit=lambda _: None)
         self.assertEqual(self.files.active_email_draft_id, 1)
         self.files.processing_eml = True
-        self.assertIn("error", self.edit())
+        self.assertNotIn("error", self.edit())  # processing_message no longer blocks edit_email
 
     def test_clear_resets_pointer_but_keeps_saved_draft(self):
         self.edit()

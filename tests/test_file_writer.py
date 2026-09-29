@@ -206,7 +206,7 @@ class FileWriterTests(unittest.TestCase):
         memory.mkdir()
         (memory / "AGENT.md").write_text("Use evidence.")
         files = FileTools(memory)
-        for flag in ("read_only", "processing_eml", "edit_learning"):
+        for flag in ("read_only", "edit_learning"):  # processing_eml no longer blocks create_file
             setattr(files, flag, True)
             self.assertFalse(files.execute("create_file", {"filename": "a.md", "content": BODY})["success"])
             setattr(files, flag, False)
