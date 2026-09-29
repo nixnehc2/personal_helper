@@ -1,4 +1,4 @@
-"""Run with python -m agent.main."""
+﻿"""Run with python -m agent.main."""
 import argparse
 import copy
 import getpass
@@ -519,10 +519,20 @@ def main():
     parser.add_argument("--rule", type=int)
     parser.add_argument("--store", type=Path)
     parser.add_argument("--claim")
+    parser.add_argument("--auto-import", action="store_true")
     args = parser.parse_args()
     history = None
     event_lock = None
     exit_handler = None
+    if args.auto_import:
+        from .messages.auto_import import run_post_sync_auto_import
+        files = FileTools(args.root, confirm_batch)
+        config = load_config()
+        token = config.get("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_AUTH_TOKEN") or getpass.getpass("API token: ")
+        client = Client(token, config)
+        result = run_post_sync_auto_import(client, files, emit=print)
+        print(result["display"])
+        return 0
     if args.event:
         from .event_runtime import claim_lock, console_exit_handler
         from .automations import AutomationStore
@@ -655,6 +665,10 @@ def main():
                         print("[message] " + safe_display(result["status"] + " | " + result.get("note", "")))
                     else:
                         print("[email] " + safe_display(result["status"] + " | " + result.get("note", "")))
+                    if name in ("update_email", "update_qq") and "error" not in result:
+                        from .messages.auto_import import run_post_sync_auto_import
+                        ai_result = run_post_sync_auto_import(client, files)
+                        print(safe_display(ai_result["display"]))
                     # Keep the explicit command and its outcome visible to later chat.
                     messages.extend([dict(role="user", content=user),
                                      dict(role="assistant", content=json.dumps(result, ensure_ascii=False))])
