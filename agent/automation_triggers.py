@@ -136,9 +136,7 @@ def email(config, settings):
 
 
 def qq(config, settings):
-    object_fields(config, ("match", "check_interval_seconds"), ("match",))
-    if "check_interval_seconds" in config:
-        positive(config["check_interval_seconds"], "check_interval_seconds")
+    object_fields(config, ("match",), ("match",))
     match = config["match"]
     if not isinstance(match, dict):
         raise ValueError("match 必须是对象")

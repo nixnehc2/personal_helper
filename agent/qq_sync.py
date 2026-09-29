@@ -88,6 +88,19 @@ class QQStore:
             db.close()
 
 
+
+    def messages_between_rowids(self, after_rowid, through_rowid):
+        """Return (payload, rowid) with after_rowid < rowid <= through_rowid."""
+        if not self.path.exists():
+            return []
+        db = self.connect()
+        try:
+            return [(row[0], row[1]) for row in db.execute(
+                "SELECT payload, rowid FROM messages WHERE rowid > ? AND rowid <= ? ORDER BY rowid",
+                (after_rowid, through_rowid)
+            ).fetchall()]
+        finally:
+            db.close()
 def update_qq(config=None, db_path=None, client=None, page_size=100, progress=None, skip_event=None,
               allowed_conversations=None):
     """Sync all conversations when allowed_conversations is None, otherwise only (type, str(id)) identities.

@@ -124,7 +124,7 @@ def loop_lock(store, purpose="checker"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="前台时间/邮件检查器；仅入队，不执行任务")
+    parser = argparse.ArgumentParser(description="前台时间/消息检查器；仅入队，不执行任务")
     parser.add_argument("--interval", type=float, help="检查间隔秒数（默认配置或 10）")
     parser.add_argument("--once", action="store_true", help="只检查一次")
     args = parser.parse_args()

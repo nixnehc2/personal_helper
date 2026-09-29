@@ -20,6 +20,8 @@ class TimerSource:
         self.tolerance = tolerance
 
     def prepare(self, rule, now):
+        if rule["mode"] == "once" and rule["pending_events"]:
+            return None
         return True
 
     def check(self, rule, now, prepared):
@@ -164,8 +166,6 @@ class QQSource:
         self._cursor_cache = {}
 
     def prepare(self, rule, now):
-        if rule["next_check_at"] and instant(rule["next_check_at"]) > now:
-            return None
         if rule["mode"] == "once" and rule["pending_events"]:
             return None
         db_path = str(self.store.path)
@@ -182,7 +182,7 @@ class QQSource:
             skipped.append(dict(id=rule["id"], reason="QQ 基线已建立；现有消息不触发", through_rowid=current_max_rowid))
         else:
             from .messages.models import Message
-            rows = self.store.messages_after_rowid(previous["last_rowid"])
+            rows = self.store.messages_between_rowids(previous["last_rowid"], current_max_rowid)
             for payload, rowid in rows:
                 try:
                     message = Message(**json.loads(payload))
@@ -205,7 +205,5 @@ class QQSource:
                 queued.append(dict(id=rule["id"], event_id=event_id))
                 if rule["mode"] == "once":
                     break
-        last_rowid = max(current_max_rowid, previous["last_rowid"] if previous and not baseline else 0)
-        rule["cursor"] = json.dumps(dict(last_rowid=last_rowid))
-        rule["next_check_at"] = stamp(now + timedelta(seconds=rule["trigger_config"].get("check_interval_seconds", 600)))
+        rule["cursor"] = json.dumps(dict(last_rowid=current_max_rowid))
         return queued, skipped

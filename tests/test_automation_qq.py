@@ -43,7 +43,7 @@ def qq_rule(match=None, mode="continuous"):
     """Create a QQ automation rule dict."""
     return dict(name="QQ 监控", trigger_type="event", source="qq",
                 content="检查这条 QQ 消息", mode=mode,
-                trigger_config=dict(match=match or {}, check_interval_seconds=10))
+                trigger_config=dict(match=match or {}))
 
 
 NOW = fixtures.NOW
@@ -304,12 +304,14 @@ class QQSourceTests(unittest.TestCase):
         self.assertEqual(json.loads(self._row()["cursor"])["last_rowid"], 3)
         self.assertEqual(len(self._row()["pending_events"]), 1)
 
-    def test_check_interval_sets_next_check_at(self):
+    def test_qq_source_does_not_use_next_check_at(self):
         self._create()
         self._check()
-        from agent.automation_triggers import instant
-        expected = instant(NOW.isoformat()) + timedelta(seconds=10)
-        self.assertEqual(instant(self._row()["next_check_at"]), expected)
+        self.assertIsNone(self._row()["next_check_at"])
+        self._insert(_msg(1))
+        self._check(1)
+        self.assertIsNone(self._row()["next_check_at"])
+        self.assertEqual(len(self._row()["pending_events"]), 1)
 
     def test_pause_resume_resets_baseline(self):
         self._insert(_msg(1, text="before pause"))
@@ -367,9 +369,51 @@ class QQSourceTests(unittest.TestCase):
         self._insert(_msg(1, text="old"))
         self._check(10)
         cursor_before = self._row()["cursor"]
-        self.store.manage("update", 1, dict(trigger_config={"match": {"text_contains": "new"}, "check_interval_seconds": 10}))
+        self.store.manage("update", 1, dict(trigger_config={"match": {"text_contains": "new"}}))
         self.assertEqual(self._row()["cursor"], cursor_before)
 
+
+
+    def test_rowid_snapshot_upper_bound(self):
+        """Messages inserted after prepare snapshot are not scanned this tick."""
+        self._create(match={})
+        self._check()  # baseline, cursor=0
+        self._insert(_msg(1, text="msg1"))
+        self._insert(_msg(2, text="msg2"))
+        # check_once snapshots max_rowid=2, scans 1-2
+        result = self._check(1)
+        self.assertEqual(len(result["enqueued"]), 2)
+        self.assertEqual(json.loads(self._row()["cursor"])["last_rowid"], 2)
+        # Insert msg3 AFTER the snapshot was taken (simulating concurrent insert)
+        self._insert(_msg(3, text="msg3"))
+        # Next tick: snapshot=3, scans rowid 3 only
+        result2 = self._check(2)
+        self.assertEqual(len(result2["enqueued"]), 1)
+        self.assertEqual(json.loads(self._row()["cursor"])["last_rowid"], 3)
+        # Next tick: no new messages
+        result3 = self._check(3)
+        self.assertEqual(len(result3["enqueued"]), 0)
+
+    def test_every_tick_checks_local_sqlite(self):
+        """QQSource checks every tick, no per-rule interval gating."""
+        self._create(match={})
+        self._check()  # baseline
+        self._insert(_msg(1))
+        # Immediate next tick should find the message
+        result = self._check(1)
+        self.assertEqual(len(result["enqueued"]), 1)
+        # Another message, another immediate tick
+        self._insert(_msg(2))
+        result = self._check(2)
+        self.assertEqual(len(result["enqueued"]), 1)  # only msg2, msg1 already enqueued
+
+    def test_validator_rejects_check_interval_seconds(self):
+        rule = qq_rule(match={"text_contains": "test"})
+        rule["trigger_config"]["check_interval_seconds"] = 10
+        with self.assertRaises(ValueError):
+            self._create(match={"text_contains": "test"})
+            # Override trigger_config after creation
+            self.store.manage("create", rule=rule)
 
 class QQConsumerRuntimeTests(unittest.TestCase):
     """Test QQ event consumption through the existing consumer and runtime."""
