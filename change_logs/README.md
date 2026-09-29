@@ -25,6 +25,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-30 | [04：call_for_user Automation 工具](2026-09-30-04-call-for-user-automation.md) |
 | 2026-09-30 | [03：架构简化与权限模型统一](2026-09-30-03-architecture-simplification-unified-permissions.md) |
 | 2026-09-30 | [02：QQ Automation 三项修正](2026-09-30-02-qq-automation-fixes.md) |
 | 2026-09-30 | [01：QQ Automation Event Source](2026-09-30-01-qq-automation-event-source.md) |

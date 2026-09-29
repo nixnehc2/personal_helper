@@ -197,6 +197,10 @@ class FileTools:
         self.processing_message = False
         self.incoming_message = False
         self.edit_learning = False
+        self.event_complete = False
+        self.event_reply = None
+        self.call_for_user_active = False
+        self.call_for_user_prompt = None
         self.one_shot_paths = set()
         self.limit_one_shot = False
         self.writes = []
@@ -213,7 +217,10 @@ class FileTools:
     @property
     def tool_specs(self):
         if getattr(self, "event_session", False) and not self.processing_message and not self.read_only:
-            return TOOLS + [schema("complete_event", "仅当事件任务全部完成且不需要用户反馈时调用；有 Memory 事务时不能完成。reply 必须为完整最终回复。", {"reply": "string"}, ["reply"])]
+            return TOOLS + [
+                schema("call_for_user", "仅用于 Automation 独立事件会话。当前 Automation 无法继续，需要真实用户回答、确认、选择或补充信息时调用。调用后当前 Agent turn 立即结束，Automation Event 不完成，Runtime 显示 prompt 并等待用户输入。普通人工聊天中不要使用本工具。如果任务已经完成且无需用户反馈，应调用 complete_event。", {"prompt": "string"}, ["prompt"]),
+                schema("complete_event", "仅当事件任务全部完成且不需要用户反馈时调用；有 Memory 事务时不能完成。reply 必须为完整最终回复。", {"reply": "string"}, ["reply"]),
+            ]
         return getattr(self, "_tool_specs", TOOLS)
 
     @tool_specs.setter
@@ -461,9 +468,19 @@ class FileTools:
             if name == "complete_event" and getattr(self, "event_session", False) and not self.processing_message and not self.read_only:
                 if not isinstance(arguments, dict) or set(arguments) != {"reply"} or not isinstance(arguments["reply"], str) or not arguments["reply"].strip() or self.policy._active() or self.pending_email_send is not None:
                     raise ValueError("先完成或取消 Memory 事务并处理待发送邮件，再结束事件")
+                if getattr(self, "call_for_user_active", False):
+                    raise ValueError("call_for_user 和 complete_event 不能在同一轮调用")
                 self.event_complete = True
                 self.event_reply = arguments["reply"]
                 return dict(status="event_complete")
+            if name == "call_for_user" and getattr(self, "event_session", False) and not self.processing_message and not self.read_only:
+                if not isinstance(arguments, dict) or set(arguments) != {"prompt"} or not isinstance(arguments["prompt"], str) or not arguments["prompt"].strip():
+                    raise ValueError("prompt 不能为空")
+                if self.event_complete:
+                    raise ValueError("complete_event 和 call_for_user 不能在同一轮调用")
+                self.call_for_user_active = True
+                self.call_for_user_prompt = arguments["prompt"]
+                return dict(status="call_for_user", prompt=arguments["prompt"])
             spec = next((x for x in TOOLS if x["name"] == name), None)
             if spec is None or not isinstance(arguments, dict):
                 raise ValueError("invalid tool call")

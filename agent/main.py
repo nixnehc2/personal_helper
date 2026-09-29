@@ -329,8 +329,8 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
                 if state["changes"]:
                     emit(f"[memory] Temporary 保留 {len(state['changes'])} 个文件的修改；尚未提交。")
                 return state
-            if any(c.get("name") == "complete_event" for c in calls) and len(calls) != 1:
-                raise ValueError("complete_event 必须单独调用，且在其他工具全部结束后调用")
+            if any(c.get("name") in ("complete_event", "call_for_user") for c in calls) and len(calls) != 1:
+                raise ValueError("complete_event 和 call_for_user 必须单独调用，且在其他工具全部结束后调用")
             results = []
             for call in calls:
                 emit(tool_summary(call))
@@ -361,6 +361,8 @@ def _run_turn(client, files, messages, user, emit=print, max_steps=20, extra_sys
             messages.append(dict(role="user", content=results))
             if files.pending_email_send is not None:
                 return dict(status="waiting_feedback")
+            if getattr(files, "call_for_user_active", False):
+                return dict(status="call_for_user", prompt=files.call_for_user_prompt)
             if getattr(files, "event_complete", False) and not files.policy._active():
                 messages.append(dict(role="assistant", content=[dict(type="text", text=files.event_reply)]))
                 return files.show_memory_changes()
