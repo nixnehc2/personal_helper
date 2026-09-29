@@ -17,6 +17,14 @@ from .scheduler import OSLock, RUNTIME, atomic_json, pending_users
 RESULTS = Path(__file__).resolve().parent.parent / "data/results"
 
 
+USER_WAIT_PHASES = frozenset({"waiting_feedback", "waiting_for_user"})
+
+
+def blocks_new_event(event):
+    """True when an event is actively running an Agent turn and must not be preempted."""
+    return bool(event.get("active_session")) and event.get("phase") not in USER_WAIT_PHASES
+
+
 def events(store):
     with closing(connect(store)) as db:
         return [(store.decode(row), event) for row in db.execute("SELECT * FROM automations WHERE status IN ('active','paused') ORDER BY id")
@@ -89,7 +97,7 @@ def tick(store, files, children=None):
         for event_id, child in list(children.items()):
             if event_id not in active_ids and child.poll() is not None:
                 del children[event_id]
-        has_active = any(e.get("active_session") and e.get("phase") != "waiting_feedback" for r, e in batch)
+        has_active = any(blocks_new_event(e) for _, e in batch)
         for rule, event in batch:
             if live(event):
                 continue
