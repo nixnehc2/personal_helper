@@ -134,4 +134,40 @@ def email(config, settings):
     return config
 
 
-EVENT_VALIDATORS = {"email": email}
+
+def qq(config, settings):
+    object_fields(config, ("match", "check_interval_seconds"), ("match",))
+    if "check_interval_seconds" in config:
+        positive(config["check_interval_seconds"], "check_interval_seconds")
+    match = config["match"]
+    if not isinstance(match, dict):
+        raise ValueError("match 必须是对象")
+    for key in match:
+        if key not in ("conversations", "sender_ids", "text_contains"):
+            raise ValueError(f"未知 match 字段：{key}；允许 conversations、sender_ids、text_contains")
+    if "conversations" in match:
+        convs = match["conversations"]
+        if not isinstance(convs, list) or not convs:
+            raise ValueError("conversations 必须是非空列表")
+        for item in convs:
+            if not isinstance(item, dict):
+                raise ValueError("conversation 必须是对象")
+            if set(item) - {"type", "id"} or "type" not in item or "id" not in item:
+                raise ValueError("conversation 只允许 type 和 id")
+            if item["type"] not in ("group", "private"):
+                raise ValueError("conversation type 必须是 group 或 private")
+            if not isinstance(item["id"], (str, int)) or not str(item["id"]).strip():
+                raise ValueError("conversation id 必须是非空值")
+    if "sender_ids" in match:
+        sids = match["sender_ids"]
+        if not isinstance(sids, list) or not sids:
+            raise ValueError("sender_ids 必须是非空列表")
+        for v in sids:
+            if not isinstance(v, (str, int)) or not str(v).strip():
+                raise ValueError("sender_ids 项必须是非空值")
+    if "text_contains" in match:
+        nonempty(match["text_contains"], "text_contains")
+    return config
+
+
+EVENT_VALIDATORS = {"email": email, "qq": qq}

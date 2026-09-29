@@ -145,7 +145,7 @@ class AutomationStore:
                         if action != "cancel" and status not in ("active", "paused"):
                             raise ValueError(f"{status} 规则不能暂停")
                         db.execute("UPDATE automations SET status=?,updated_at=? WHERE id=?", (target, stamp, id))
-                        if action == "resume" and current["source"] == "email":
+                    if action == "resume" and current["source"] in ("email", "qq"):
                             db.execute("UPDATE automations SET cursor=NULL,next_check_at=NULL WHERE id=?", (id,))
                     if action == "cancel":
                         events = [e for e in current["pending_events"] if e.get("status") != "pending"]

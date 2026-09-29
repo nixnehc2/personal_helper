@@ -133,3 +133,79 @@ class EmailSource:
         rule["cursor"] = json.dumps(dict(source=source, last_id=max(high, previous["last_id"] if previous and not baseline else 0)))
         rule["next_check_at"] = stamp(now + timedelta(seconds=rule["trigger_config"]["check_interval_seconds"]))
         return queued, skipped
+
+
+def matches_qq(message, match):
+    """Match a QQ message against the trigger match config.
+
+    Same-field values are OR; different fields are AND.
+    Empty match matches everything.
+    """
+    content = message.content
+    if "conversations" in match:
+        conv = content.get("conversation", {})
+        kind, cid = conv.get("type"), str(conv.get("id", ""))
+        if not any(c["type"] == kind and str(c["id"]) == cid for c in match["conversations"]):
+            return False
+    if "sender_ids" in match:
+        sender_id = str(content.get("sender", {}).get("user_id", ""))
+        if sender_id not in [str(s) for s in match["sender_ids"]]:
+            return False
+    if "text_contains" in match:
+        if match["text_contains"] not in content.get("text", ""):
+            return False
+    return True
+
+
+class QQSource:
+    def __init__(self, db_path=None):
+        from .qq_sync import QQStore, DB_PATH
+        self.store = QQStore(db_path if db_path is not None else DB_PATH)
+        self._cursor_cache = {}
+
+    def prepare(self, rule, now):
+        if rule["next_check_at"] and instant(rule["next_check_at"]) > now:
+            return None
+        if rule["mode"] == "once" and rule["pending_events"]:
+            return None
+        db_path = str(self.store.path)
+        if db_path not in self._cursor_cache:
+            self._cursor_cache[db_path] = self.store.rowid_cursor()
+        return self._cursor_cache[db_path]
+
+    def check(self, rule, now, prepared):
+        current_max_rowid = prepared
+        previous = json.loads(rule["cursor"]) if rule["cursor"] else None
+        baseline = previous is None
+        queued, skipped = [], []
+        if baseline:
+            skipped.append(dict(id=rule["id"], reason="QQ 基线已建立；现有消息不触发", through_rowid=current_max_rowid))
+        else:
+            from .messages.models import Message
+            rows = self.store.messages_after_rowid(previous["last_rowid"])
+            for payload, rowid in rows:
+                try:
+                    message = Message(**json.loads(payload))
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    continue
+                if not matches_qq(message, rule["trigger_config"]["match"]):
+                    continue
+                event_id = f"qq:{rule['id']}:{message.id}"
+                if any(e["event_id"] == event_id for e in rule["pending_events"]):
+                    continue
+                conv = message.content.get("conversation", {})
+                rule["pending_events"].append(dict(event_id=event_id, source="qq", event_type="qq.matched",
+                    occurred_at=stamp(now), content=rule["content"], data=dict(
+                        message=dict(source="qq", id=message.id),
+                        conversation=dict(type=conv.get("type", ""), id=str(conv.get("id", "")),
+                                          name=conv.get("name", "")),
+                        sender=dict(message.content.get("sender", {})),
+                        message_time=message.time, detected_at=stamp(now)),
+                    status="pending", reply=None, attempts=0, retry_at=None, last_error=None))
+                queued.append(dict(id=rule["id"], event_id=event_id))
+                if rule["mode"] == "once":
+                    break
+        last_rowid = max(current_max_rowid, previous["last_rowid"] if previous and not baseline else 0)
+        rule["cursor"] = json.dumps(dict(last_rowid=last_rowid))
+        rule["next_check_at"] = stamp(now + timedelta(seconds=rule["trigger_config"].get("check_interval_seconds", 600)))
+        return queued, skipped

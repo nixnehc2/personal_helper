@@ -25,6 +25,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-30 | [01：QQ Automation Event Source](2026-09-30-01-qq-automation-event-source.md) |
 | 2026-09-29 | [05：允许空邮件匹配条件](2026-09-29-05-allow-empty-email-match.md) |
 | 2026-09-29 | [04：Memory 默认提交与邮件非阻塞确认](2026-09-29-04-nonblocking-email-approval.md) |
 | 2026-09-29 | [03：QQ 混合消息可读内容适配](2026-09-29-03-qq-readable-segments.md) |

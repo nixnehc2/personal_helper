@@ -46,6 +46,29 @@ class QQStore:
             raise ValueError(f"QQ Message {id} 不存在")
         return message
 
+    def rowid_cursor(self):
+        """Return the current maximum rowid, or 0 if the table is empty."""
+        if not self.path.exists():
+            return 0
+        db = self.connect()
+        try:
+            row = db.execute("SELECT MAX(rowid) FROM messages").fetchone()
+            return row[0] or 0
+        finally:
+            db.close()
+
+    def messages_after_rowid(self, after_rowid):
+        """Return (payload, rowid) tuples with rowid > after_rowid, in rowid order."""
+        if not self.path.exists():
+            return []
+        db = self.connect()
+        try:
+            return [(row[0], row[1]) for row in db.execute(
+                "SELECT payload, rowid FROM messages WHERE rowid > ? ORDER BY rowid",
+                (after_rowid,)
+            ).fetchall()]
+        finally:
+            db.close()
     def mark_imported(self, expected):
         db = self.connect()
         try:

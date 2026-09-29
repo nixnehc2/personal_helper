@@ -35,10 +35,11 @@ def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=No
     if not math.isfinite(tolerance) or tolerance < 0:
         raise ValueError("容差必须是有限非负秒数")
     result = dict(enqueued=[], skipped=[], failed=[])
-    from .automation_sources import TimerSource, EmailSource
-    sources = {"timer": TimerSource(tolerance), "email": EmailSource(store.settings, email_index_path)}
+    from .automation_sources import TimerSource, EmailSource, QQSource
+    sources = {"timer": TimerSource(tolerance), "email": EmailSource(store.settings, email_index_path), "qq": QQSource(qq_db_path)}
     with closing(connect(store)) as db:
         rows = [dict(r) for r in db.execute("SELECT * FROM automations WHERE status='active' ORDER BY id")]
+    check_qq_sync_due(store.settings, now, qq_db_path, qq_whitelist_path)
     for snapshot in rows:
         id = snapshot["id"]
         try:
@@ -74,7 +75,6 @@ def check_once(store=None, now=None, tolerance_seconds=None, email_index_path=No
             except Exception as record_error:
                 failure["record_error"] = str(record_error)
             result["failed"].append(failure)
-    check_qq_sync_due(store.settings, now, qq_db_path, qq_whitelist_path)
     result["mailbox_syncs"] = [sync["sync_summary"] for sync in sources["email"].synced.values()
                                if isinstance(sync, dict) and "sync_summary" in sync]
     result["display"] = (f"入队 {len(result['enqueued'])}；跳过 {len(result['skipped'])} 条规则；失败 {len(result['failed'])}\n"
