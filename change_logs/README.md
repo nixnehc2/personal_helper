@@ -1,4 +1,4 @@
-﻿# 说明文档与修改日志
+# 说明文档与修改日志
 
 本目录集中保存项目说明和每次修改的记录；`logs/` 是本地运行日志目录，不用于版本化修改记录。以下说明中的命令和配置路径均以项目根目录为基准。
 
@@ -25,7 +25,6 @@
 
 | 日期 | 记录 |
 | --- | --- |
-| 2026-09-30 | [03：Post-Sync Auto Import](2026-09-30-03-post-sync-auto-import.md) |
 | 2026-09-30 | [02：QQ Automation 三项修正](2026-09-30-02-qq-automation-fixes.md) |
 | 2026-09-30 | [01：QQ Automation Event Source](2026-09-30-01-qq-automation-event-source.md) |
 | 2026-09-29 | [05：允许空邮件匹配条件](2026-09-29-05-allow-empty-email-match.md) |

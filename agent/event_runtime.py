@@ -1,4 +1,4 @@
-﻿"""Independent event sessions over the existing pending_events and run_turn."""
+"""Independent event sessions over the existing pending_events and run_turn."""
 from contextlib import closing, contextmanager
 import json
 import os
@@ -80,17 +80,6 @@ def launch(store, root, rule, event):
     change_event(store, rule["id"], event["event_id"], lambda r, e: e.update(pid=child.pid), allow_paused=True)
     return child
 
-
-
-def launch_auto_import(root):
-    """Launch auto-import subprocess after sync completes."""
-    if os.name != "nt":
-        raise OSError("自动导入独立终端目前只支持 Windows")
-    child = subprocess.Popen([sys.executable, "-m", "agent.main", "--root", str(root),
-                              "--auto-import"],
-                             cwd=Path(__file__).resolve().parent.parent,
-                             creationflags=subprocess.CREATE_NEW_CONSOLE)
-    return child
 
 def tick(store, files, children=None):
     children = children if children is not None else {}
