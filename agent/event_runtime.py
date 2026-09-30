@@ -255,8 +255,26 @@ def _start_terminal_input_thread(read, request_manager, request_id,
 
 def _wait_for_answer(request_manager, request_id, answer_event, answer_holder,
                      emit, timeout=0.5):
+    """Wait for an answer from any channel.
+
+    Uses answer_event as a fast wake-up signal (set by terminal input thread),
+    but also polls the SQLite database each timeout cycle so that answers
+    submitted via Feishu (which only writes to SQLite) are also discovered.
+    The database is the authoritative state source; answer_event merely
+    reduces wait latency.
+    """
     while not answer_event.is_set():
         answer_event.wait(timeout=timeout)
+        if answer_event.is_set():
+            break
+        # Poll SQLite: Feishu (or other remote) answers arrive via submit_answer
+        # which only writes to the DB without setting answer_event.
+        req = request_manager.get_request(request_id)
+        if req and req.get("status") == "answered":
+            answer_holder["answer"] = req["answer"]
+            answer_holder["source"] = req["answer_source"]
+            answer_event.set()
+            break
     return answer_holder.get("answer"), answer_holder.get("source")
 
 def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None, feishu_client=None, request_manager=None):
@@ -300,6 +318,7 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
             change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
             _auto_meta = {"rule_id": rule_id, "event_id": event_id, "event_content": event.get("content", "")}
             recovery_turn = 0
+            user_was_answered = False
             while True:
                 run_turn(client, files, messages, user, emit=emit, extra_system=extra, emit_final=False,
                          trigger_type="automation", session_id=files.policy.session, automation_meta=_auto_meta)
@@ -373,6 +392,7 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                     active_user_call_id = user_call_id
                     active_feishu_client = feishu_client
                     user = user_answer
+                    user_was_answered = True
                     break
 
                 if getattr(files, "pending_email_send", None) is not None or getattr(files, "pending_approval", None) is not None:
@@ -385,6 +405,8 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                 emit("[automation] protocol_violation event_id=%s" % event_id)
                 emit("[automation] recovery_attempt=%d event_id=%s" % (recovery_turn, event_id))
                 user = "Runtime 检测到你在上一轮没有调用 complete_event 也没有调用 call_for_user。这是一个 Automation protocol violation。请根据任务实际完成情况，立即做出明确选择：任务已完成则调用 complete_event(reply=...)；需要用户输入则调用 call_for_user(prompt=...)。不要输出普通文本。"
+                continue
+            if user_was_answered:
                 continue
             if getattr(files, "call_for_user_active", False):
                 continue

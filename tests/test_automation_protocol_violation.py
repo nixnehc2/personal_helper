@@ -1,6 +1,7 @@
 """Tests for Automation protocol violation detection and recovery."""
 import contextlib
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -194,24 +195,32 @@ class TestProtocolViolationRecovery(unittest.TestCase):
     @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
     @patch("agent.main.run_turn")
     def test_recovery_completes_via_call_for_user_then_complete_event(self, mock_run_turn, mock_qq):
-        """Protocol violation -> recovery -> call_for_user -> user answer -> complete_event."""
+        """Protocol violation -> recovery -> call_for_user -> user answer -> complete_event.
+
+        Verifies:
+        - The third run_turn receives user=="yes" (the call_for_user answer)
+        - read() is NOT called after call_for_user answer (no extra waiting_feedback)
+        - Event completes normally
+        """
         files = self._create_files()
         event = self._mock_event()
         rule = self._mock_rule(event)
         store = self._setup_store(rule)
         mock_ce = self._make_change_event_mock(event, rule)
 
-        call_count = [0]
-        seen_user_call_ids = []
+        captured_users = []
 
         def fake_run_turn(client, f, messages, user, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
+            captured_users.append(user)
+            n = len(captured_users)
+            if n == 1:
+                # First turn: plain text -> protocol violation
                 messages.append({"role": "assistant", "content": [
                     {"type": "text", "text": "Need more details."}
                 ]})
                 f.event_complete = False
-            elif call_count[0] == 2:
+            elif n == 2:
+                # Recovery turn: agent calls call_for_user
                 messages.append({"role": "assistant", "content": [
                     {"type": "tool_use", "id": "tu1", "name": "call_for_user",
                      "input": {"prompt": "Should I finalize now?"}}
@@ -220,6 +229,7 @@ class TestProtocolViolationRecovery(unittest.TestCase):
                 f.call_for_user_active = True
                 f.call_for_user_prompt = "Should I finalize now?"
             else:
+                # Third turn: agent completes after user answer
                 messages.append({"role": "assistant", "content": [
                     {"type": "tool_use", "id": "tu2", "name": "complete_event",
                      "input": {"reply": "Final result"}}
@@ -229,10 +239,17 @@ class TestProtocolViolationRecovery(unittest.TestCase):
 
         mock_run_turn.side_effect = fake_run_turn
 
+        def unexpected_read(prompt):
+            raise AssertionError(
+                "call_for_user answer must resume Agent directly; "
+                "Runtime must not enter waiting_feedback"
+            )
+
         class FakeRequestManager:
             def create_request(self, request_id, event_id, rule_id, session, kind, prompt):
-                seen_user_call_ids.append(request_id)
                 return {"id": request_id}
+            def get_request(self, request_id):
+                return {"status": "waiting"}
             def submit_answer(self, request_id, answer, source):
                 return "success"
             def mark_invalid(self, request_id):
@@ -246,15 +263,20 @@ class TestProtocolViolationRecovery(unittest.TestCase):
             from agent.event_runtime import run_event
             run_event(
                 MagicMock(), files, store, 1, "test-evt-001", "tok123",
-                emit=self._emit, read=lambda p: "", automatic=True,
+                emit=self._emit, read=unexpected_read, automatic=True,
                 request_manager=request_manager,
             )
 
-        self.assertEqual(call_count[0], 3)
-        self.assertEqual(len(seen_user_call_ids), 1)
+        self.assertEqual(len(captured_users), 3)
+        # First turn: initial event instruction (some string)
+        self.assertIsInstance(captured_users[0], str)
+        # Second turn: recovery instruction
+        self.assertIn("protocol violation", captured_users[1])
+        # Third turn: must be the user answer "yes", not a new read() call
+        self.assertEqual(captured_users[2], "yes",
+                         "Third Agent turn must receive the call_for_user answer as user input")
         self.assertTrue(files.event_complete)
         self.assertEqual(event.get("reply"), "Final result")
-        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
         self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
 
     @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
@@ -390,6 +412,214 @@ class TestProtocolViolationRecovery(unittest.TestCase):
         self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
         self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
 
+
+
+    @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
+    @patch("agent.main.run_turn")
+    def test_normal_call_for_user_resumes_directly(self, mock_run_turn, mock_qq):
+        """Normal call_for_user (no recovery): answer flows directly to next Agent turn."""
+        files = self._create_files()
+        event = self._mock_event()
+        rule = self._mock_rule(event)
+        store = self._setup_store(rule)
+        mock_ce = self._make_change_event_mock(event, rule)
+
+        captured_users = []
+
+        def fake_run_turn(client, f, messages, user, **kwargs):
+            captured_users.append(user)
+            n = len(captured_users)
+            if n == 1:
+                # First turn: agent calls call_for_user directly
+                messages.append({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu1", "name": "call_for_user",
+                     "input": {"prompt": "What color?"}}
+                ]})
+                f.event_complete = False
+                f.call_for_user_active = True
+                f.call_for_user_prompt = "What color?"
+            else:
+                # Second turn: agent completes after user answer
+                messages.append({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu2", "name": "complete_event",
+                     "input": {"reply": "Color is blue"}}
+                ]})
+                f.event_complete = True
+                f.event_reply = "Color is blue"
+
+        mock_run_turn.side_effect = fake_run_turn
+
+        def unexpected_read(prompt):
+            raise AssertionError(
+                "call_for_user answer must resume Agent directly; "
+                "Runtime must not enter waiting_feedback"
+            )
+
+        class FakeRequestManager:
+            def create_request(self, request_id, event_id, rule_id, session, kind, prompt):
+                return {"id": request_id}
+            def get_request(self, request_id):
+                return {"status": "waiting"}
+            def submit_answer(self, request_id, answer, source):
+                return "success"
+            def mark_invalid(self, request_id):
+                return None
+
+        request_manager = FakeRequestManager()
+
+        with patch("agent.event_runtime.change_event", mock_ce), \
+             patch("agent.event_runtime._start_terminal_input_thread", lambda read, rm, request_id, answer_event, answer_holder: None), \
+             patch("agent.event_runtime._wait_for_answer", lambda rm, request_id, ae, ah, emit: ("blue", "terminal")):
+            from agent.event_runtime import run_event
+            run_event(
+                MagicMock(), files, store, 1, "test-evt-001", "tok123",
+                emit=self._emit, read=unexpected_read, automatic=True,
+                request_manager=request_manager,
+            )
+
+        self.assertEqual(len(captured_users), 2)
+        self.assertEqual(captured_users[1], "blue",
+                         "Second Agent turn must receive the call_for_user answer")
+        self.assertTrue(files.event_complete)
+        self.assertEqual(event.get("reply"), "Color is blue")
+
+
+class TestWaitForAnswer(unittest.TestCase):
+    """Tests for _wait_for_answer with SQLite polling (Feishu wake-up)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_path = Path(self.tmp.name) / "test_requests.sqlite3"
+
+    def test_terminal_answer_wakes_immediately(self):
+        """Terminal answer sets answer_event -> _wait_for_answer returns immediately."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_answer
+
+        mgr = UserRequestManager(path=self.db_path)
+        req_id = "req-1"
+        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+
+        answer_event = threading.Event()
+        answer_holder = {}
+
+        # Simulate terminal: submit_answer + set event
+        mgr.submit_answer(req_id, "terminal answer", "terminal")
+        answer_holder["answer"] = "terminal answer"
+        answer_holder["source"] = "terminal"
+        answer_event.set()
+
+        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
+        self.assertEqual(answer, "terminal answer")
+        self.assertEqual(source, "terminal")
+
+    def test_feishu_answer_discovered_via_sqlite_polling(self):
+        """Feishu answer only writes to SQLite (no answer_event.set()).
+
+        _wait_for_answer must discover it by polling the DB.
+        """
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_answer
+
+        mgr = UserRequestManager(path=self.db_path)
+        req_id = "req-feishu"
+        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+
+        answer_event = threading.Event()
+        answer_holder = {}
+
+        # Simulate Feishu: only write to SQLite, no answer_event.set()
+        result = mgr.submit_answer(req_id, "feishu answer", "feishu")
+        self.assertEqual(result, "success")
+
+        # _wait_for_answer should discover the answer by polling
+        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
+        self.assertEqual(answer, "feishu answer")
+        self.assertEqual(source, "feishu")
+        self.assertTrue(answer_event.is_set(), "answer_event should be set after DB discovery")
+
+    def test_feishu_answer_discovered_in_thread(self):
+        """_wait_for_answer running in a thread wakes up when Feishu writes to SQLite."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_answer
+
+        mgr = UserRequestManager(path=self.db_path)
+        req_id = "req-thread"
+        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+
+        answer_event = threading.Event()
+        answer_holder = {}
+        result_box = []
+
+        def wait_in_thread():
+            ans, src = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
+            result_box.append((ans, src))
+
+        t = threading.Thread(target=wait_in_thread, daemon=True)
+        t.start()
+
+        # Wait a moment, then submit Feishu answer (no answer_event.set())
+        time.sleep(0.3)
+        mgr.submit_answer(req_id, "feishu thread answer", "feishu")
+
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "_wait_for_answer should have returned")
+        self.assertEqual(len(result_box), 1)
+        self.assertEqual(result_box[0], ("feishu thread answer", "feishu"))
+
+    def test_first_response_wins_feishu_then_terminal(self):
+        """If Feishu answers first, terminal answer is rejected."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_answer
+
+        mgr = UserRequestManager(path=self.db_path)
+        req_id = "req-frw"
+        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+
+        answer_event = threading.Event()
+        answer_holder = {}
+
+        # Feishu answers first
+        result = mgr.submit_answer(req_id, "F", "feishu")
+        self.assertEqual(result, "success")
+
+        # Terminal tries to answer second
+        result2 = mgr.submit_answer(req_id, "T", "terminal")
+        self.assertEqual(result2, "already_resolved")
+
+        # _wait_for_answer should get the Feishu answer
+        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
+        self.assertEqual(answer, "F")
+        self.assertEqual(source, "feishu")
+
+    def test_first_response_wins_terminal_then_feishu(self):
+        """If terminal answers first, Feishu answer is rejected."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_answer
+
+        mgr = UserRequestManager(path=self.db_path)
+        req_id = "req-frw2"
+        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+
+        answer_event = threading.Event()
+        answer_holder = {}
+
+        # Terminal answers first
+        result = mgr.submit_answer(req_id, "T", "terminal")
+        self.assertEqual(result, "success")
+        answer_holder["answer"] = "T"
+        answer_holder["source"] = "terminal"
+        answer_event.set()
+
+        # Feishu tries to answer second
+        result2 = mgr.submit_answer(req_id, "F", "feishu")
+        self.assertEqual(result2, "already_resolved")
+
+        # _wait_for_answer should get the terminal answer
+        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
+        self.assertEqual(answer, "T")
+        self.assertEqual(source, "terminal")
 
 
 if __name__ == "__main__":
