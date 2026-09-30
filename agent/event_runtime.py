@@ -523,9 +523,11 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
     finally:
         try:
             if active_user_call_id and request_manager is not None:
-                request_manager.mark_invalid(active_user_call_id)
-                if active_feishu_client is not None:
-                    active_feishu_client.send_invalidated(active_user_call_id)
+                req = request_manager.get_request(active_user_call_id)
+                if req and req.get("status") == "waiting":
+                    request_manager.mark_invalid(active_user_call_id)
+                    if active_feishu_client is not None:
+                        active_feishu_client.send_invalidated(active_user_call_id)
             files.pending_email_send = None
             files.policy.close()
             if owned:
