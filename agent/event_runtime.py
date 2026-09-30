@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import queue as _queue
 import uuid
 
 from .automations import AutomationStore
@@ -187,7 +188,49 @@ def console_exit_handler(store, rule_id, event_id):
             ctypes.windll.kernel32.SetConsoleCtrlHandler(handler, False)
 
 
-def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None):
+
+def _create_feishu_client(request_manager):
+    try:
+        from .feishu_client import FeishuClient
+        fc = FeishuClient(request_manager)
+        fc.start()
+        return fc
+    except Exception as exc:
+        print(f"[feishu] init failed: {exc}; terminal-only mode")
+        return None
+
+
+def _start_terminal_input_thread(read, request_manager, request_id,
+                                answer_event, answer_holder):
+    def _reader():
+        try:
+            while not answer_event.is_set():
+                try:
+                    user_input = read("回答> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    user_input = "/exit"
+                result = request_manager.submit_answer(
+                    request_id, user_input, "terminal",
+                )
+                if result == "success":
+                    answer_holder["answer"] = user_input
+                    answer_holder["source"] = "terminal"
+                    answer_event.set()
+                break
+        except Exception:
+            pass
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    return t
+
+
+def _wait_for_answer(request_manager, request_id, answer_event, answer_holder,
+                     emit, timeout=0.5):
+    while not answer_event.is_set():
+        answer_event.wait(timeout=timeout)
+    return answer_holder.get("answer"), answer_holder.get("source")
+
+def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None, feishu_client=None, request_manager=None):
     from .main import run_turn, safe_display, resolve_email_feedback
     output = emit
     emit = lambda text: output(safe_display(text))
@@ -197,6 +240,8 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
     owned = False
     scheduler = files.policy.scheduler
     scheduler.automatic = automatic
+    active_user_call_id = None
+    active_feishu_client = None
     try:
         event = change_event(store, rule_id, event_id, lambda r, e: None, allow_paused=True)
         if event is None or (token and event.get("active_session") != token):
@@ -241,7 +286,7 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                 if current["status"] == "active":
                     deliver(store, current, event, None if automatic else emit)
                 return
-            # Handle call_for_user: display prompt, wait for user input, resume
+            # Handle call_for_user: dual-channel (terminal + feishu)
             if getattr(files, "call_for_user_active", False):
                 import uuid as _uuid
                 user_call_id = _uuid.uuid4().hex
@@ -249,51 +294,66 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                 prompt = files.call_for_user_prompt
                 files.call_for_user_prompt = None
                 change_event(store, rule_id, event_id, lambda r,e:e.update(phase="waiting_for_user"), allow_paused=True)
+                # Create UserRequest
+                if request_manager is None:
+                    from .user_requests import UserRequestManager
+                    request_manager = UserRequestManager()
+                req = request_manager.create_request(
+                    user_call_id, event_id, rule_id,
+                    files.policy.session, "call_for_user", prompt,
+                )
+                # Create Feishu client if not already available
+                if feishu_client is None:
+                    feishu_client = _create_feishu_client(request_manager)
+                # Display on terminal
                 emit(f"[event] call_for_user requested (user_call_id={user_call_id})")
                 if not files.policy._active():
                     emit("[event] waiting for user; execution slot released")
                 else:
                     emit("[event] waiting for user while holding memory lock")
                 emit(safe_display(prompt))
-                emit("请输入回答；/commit 审阅提交，/cancel 取消事务，/exit 结束并暂停此事件")
-                scheduler.automatic = False
-                user_answer = None
-                while True:
+                emit("可在当前终端回答，也可在手机飞书回答。回答问题后可继续，/exit 结束事件")
+                # Send to Feishu
+                if feishu_client is not None:
                     try:
-                        user_input = read("回答> ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        user_input = "/exit"
-                    if user_input in ("/exit", "/event end"):
-                        files.policy.close()
-                        change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
-                        return
-                    if files.pending_email_send is not None:
-                        if user_input.lower() == "yes":
-                            change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
-                        feedback = resolve_email_feedback(files, user_input, emit)
-                        if feedback is None:
-                            continue
-                        user_answer = feedback
-                        break
-                    try:
-                        if user_input == "/cancel":
-                            emit(str(files.policy.discard(explicit=True)))
-                            continue
-                        if user_input == "/commit":
-                            with scheduler.turn():
-                                emit(str(files.policy.request_commit()))
-                            continue
-                        if management(user_input, files, store, emit):
-                            continue
-                    except (Exception, KeyboardInterrupt) as error:
-                        emit("命令失败，当前事务保留：" + str(error))
-                        continue
-                    user_answer = user_input
-                    break
-                if user_answer is None:
+                        chat_id = feishu_client._user_open_id
+                        msg_id, cid = feishu_client.send_question(
+                            chat_id, prompt, user_call_id,
+                        )
+                        if msg_id:
+                            request_manager.update_feishu_message(user_call_id, msg_id, cid)
+                            emit("[event] feishu notification sent")
+                        else:
+                            emit("[event] feishu send failed; terminal-only")
+                    except Exception as exc:
+                        emit(f"[event] feishu error: {exc}; terminal-only")
+                else:
+                    emit("[event] feishu not available; terminal-only")
+                # Dual-channel answer tracking
+                answer_event = threading.Event()
+                answer_holder = {}
+                # Start terminal input thread
+                stdin_thread = _start_terminal_input_thread(
+                    read, request_manager, user_call_id, answer_event, answer_holder,
+                )
+                # Wait for answer from either channel
+                user_answer, answer_source = _wait_for_answer(
+                    request_manager, user_call_id, answer_event, answer_holder, emit,
+                )
+                if user_answer in (None, "/exit", "/event end"):
+                    request_manager.mark_invalid(user_call_id)
+                    if feishu_client is not None:
+                        feishu_client.send_invalidated(user_call_id)
+                    files.policy.close()
+                    change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
                     return
-                emit(f"[event] user input received (user_call_id={user_call_id})")
+                if answer_source == "feishu":
+                    emit(f"[event] 已通过飞书收到回答: {safe_display(user_answer)}")
+                else:
+                    emit(f"[event] user input received (user_call_id={user_call_id})")
                 change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
+                active_user_call_id = user_call_id
+                active_feishu_client = feishu_client
                 user = user_answer
                 continue
             emit("[event][warning] automation turn ended without call_for_user or complete_event")
@@ -340,6 +400,10 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
         emit("事件失败：" + str(error))
     finally:
         try:
+            if active_user_call_id and request_manager is not None:
+                request_manager.mark_invalid(active_user_call_id)
+                if active_feishu_client is not None:
+                    active_feishu_client.send_invalidated(active_user_call_id)
             files.pending_email_send = None
             files.policy.close()
             if owned:
