@@ -123,14 +123,14 @@ class FeishuClient:
         if not text:
             return
 
-        # Cancel command
+        # Cancel command: find the latest waiting request for this chat
         if text in ("/cancel", "cancel", "取消"):
-            waiting = self._request_manager.get_waiting_for_event("")
-            for req in self._request_manager.get_waiting_for_event(""):
-                if req["feishu_chat_id"] == msg.chat_id:
-                    self._request_manager.mark_cancelled(req["request_id"])
-                    self._send_text(msg.chat_id, f"事件已终止。request_id={req['request_id']}")
-                    return
+            request = self._find_waiting_request(msg.chat_id)
+            if request is not None:
+                self._request_manager.mark_cancelled(request["request_id"])
+                self._send_text(msg.chat_id, "事件已终止(request_id=" + request["request_id"] + ")")
+            else:
+                self._send_text(msg.chat_id, "没有等待回答的请求")
             return
 
         # Answer: match to waiting request

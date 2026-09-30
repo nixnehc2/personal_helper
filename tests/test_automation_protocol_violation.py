@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from agent.event_runtime import classify_automation_turn, MAX_PROTOCOL_RECOVERY_ATTEMPTS
+from agent.user_requests import UserRequestManager
 
 
 class TestClassifyAutomationTurn(unittest.TestCase):
@@ -258,8 +259,7 @@ class TestProtocolViolationRecovery(unittest.TestCase):
         request_manager = FakeRequestManager()
 
         with patch("agent.event_runtime.change_event", mock_ce), \
-             patch("agent.event_runtime._start_terminal_input_thread", lambda read, rm, request_id, answer_event, answer_holder: None), \
-             patch("agent.event_runtime._wait_for_answer", lambda rm, request_id, ae, ah, emit: ("yes", "terminal")):
+             patch("agent.event_runtime._wait_for_user_request", lambda rm, rid, kb, emit: {"status": "answered", "answer": "yes", "source": "terminal"}):
             from agent.event_runtime import run_event
             run_event(
                 MagicMock(), files, store, 1, "test-evt-001", "tok123",
@@ -468,8 +468,7 @@ class TestProtocolViolationRecovery(unittest.TestCase):
         request_manager = FakeRequestManager()
 
         with patch("agent.event_runtime.change_event", mock_ce), \
-             patch("agent.event_runtime._start_terminal_input_thread", lambda read, rm, request_id, answer_event, answer_holder: None), \
-             patch("agent.event_runtime._wait_for_answer", lambda rm, request_id, ae, ah, emit: ("blue", "terminal")):
+             patch("agent.event_runtime._wait_for_user_request", lambda rm, rid, kb, emit: {"status": "answered", "answer": "blue", "source": "terminal"}):
             from agent.event_runtime import run_event
             run_event(
                 MagicMock(), files, store, 1, "test-evt-001", "tok123",
@@ -484,142 +483,258 @@ class TestProtocolViolationRecovery(unittest.TestCase):
         self.assertEqual(event.get("reply"), "Color is blue")
 
 
-class TestWaitForAnswer(unittest.TestCase):
-    """Tests for _wait_for_answer with SQLite polling (Feishu wake-up)."""
+class FakeKeyboard:
+    """Test keyboard that returns pre-programmed key sequences."""
+
+    def __init__(self, keys):
+        self._keys = list(keys)
+        self._idx = 0
+
+    def has_key(self):
+        return self._idx < len(self._keys)
+
+    def read_key(self):
+        if self._idx >= len(self._keys):
+            raise IndexError("No more keys")
+        ch = self._keys[self._idx]
+        self._idx += 1
+        return ch
+
+
+class TestWaitForUserRequest(unittest.TestCase):
+    """Tests for _wait_for_user_request with FakeKeyboard."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db_path = Path(self.tmp.name) / "test_requests.sqlite3"
 
-    def test_terminal_answer_wakes_immediately(self):
-        """Terminal answer sets answer_event -> _wait_for_answer returns immediately."""
+    def test_terminal_enter_submits_answer(self):
+        """Typing 'hi' + Enter submits answer via SQLite."""
         from agent.user_requests import UserRequestManager
-        from agent.event_runtime import _wait_for_answer
+        from agent.event_runtime import _wait_for_user_request
 
         mgr = UserRequestManager(path=self.db_path)
-        req_id = "req-1"
-        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        kb = FakeKeyboard(["h", "i", "\r"])
 
-        answer_event = threading.Event()
-        answer_holder = {}
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "hi")
+        self.assertEqual(result["source"], "terminal")
+        self.assertEqual(mgr.get_request("r1")["status"], "answered")
 
-        # Simulate terminal: submit_answer + set event
-        mgr.submit_answer(req_id, "terminal answer", "terminal")
-        answer_holder["answer"] = "terminal answer"
-        answer_holder["source"] = "terminal"
-        answer_event.set()
-
-        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
-        self.assertEqual(answer, "terminal answer")
-        self.assertEqual(source, "terminal")
-
-    def test_feishu_answer_discovered_via_sqlite_polling(self):
-        """Feishu answer only writes to SQLite (no answer_event.set()).
-
-        _wait_for_answer must discover it by polling the DB.
-        """
+    def test_feishu_answer_terminates_wait(self):
+        """Feishu answer in SQLite terminates wait without keyboard input."""
         from agent.user_requests import UserRequestManager
-        from agent.event_runtime import _wait_for_answer
+        from agent.event_runtime import _wait_for_user_request
 
         mgr = UserRequestManager(path=self.db_path)
-        req_id = "req-feishu"
-        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        mgr.submit_answer("r1", "feishu answer", "feishu")
+        kb = FakeKeyboard([])  # no keys pressed
 
-        answer_event = threading.Event()
-        answer_holder = {}
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "feishu answer")
+        self.assertEqual(result["source"], "feishu")
 
-        # Simulate Feishu: only write to SQLite, no answer_event.set()
-        result = mgr.submit_answer(req_id, "feishu answer", "feishu")
-        self.assertEqual(result, "success")
-
-        # _wait_for_answer should discover the answer by polling
-        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
-        self.assertEqual(answer, "feishu answer")
-        self.assertEqual(source, "feishu")
-        self.assertTrue(answer_event.is_set(), "answer_event should be set after DB discovery")
-
-    def test_feishu_answer_discovered_in_thread(self):
-        """_wait_for_answer running in a thread wakes up when Feishu writes to SQLite."""
+    def test_feishu_answers_while_typing(self):
+        """Feishu answer arrives mid-typing; partial input is discarded."""
         from agent.user_requests import UserRequestManager
-        from agent.event_runtime import _wait_for_answer
+        from agent.event_runtime import _wait_for_user_request
 
         mgr = UserRequestManager(path=self.db_path)
-        req_id = "req-thread"
-        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
 
-        answer_event = threading.Event()
-        answer_holder = {}
+        # Simulate: type "hel", then Feishu answers before next key
+        class PartialKeyboard:
+            def __init__(self):
+                self._keys = iter(["h", "e", "l"])
+                self._feishu_after = 3
+                self._count = 0
+            def has_key(self):
+                self._count += 1
+                if self._count > self._feishu_after:
+                    return False
+                return True
+            def read_key(self):
+                return next(self._keys)
+
+        kb = PartialKeyboard()
+        # Feishu answers after 3 keystrokes
+        mgr.submit_answer("r1", "A", "feishu")
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "A")
+        self.assertEqual(result["source"], "feishu")
+
+    def test_cancelled_request_ends_wait(self):
+        """Cancelled request in SQLite terminates wait."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        mgr.mark_cancelled("r1")
+        kb = FakeKeyboard([])
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "cancelled")
+
+    def test_invalid_request_ends_wait(self):
+        """Invalidated request in SQLite terminates wait."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        mgr.mark_invalid("r1")
+        kb = FakeKeyboard([])
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_ctrl_c_returns_exit(self):
+        """Ctrl+C returns exit status."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        kb = FakeKeyboard(["\x03"])
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "exit")
+
+    def test_backspace_removes_last_char(self):
+        """Backspace removes the last character from buffer."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        # Type "ab", backspace, "c", Enter
+        kb = FakeKeyboard(["a", "b", "\b", "c", "\r"])
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "ac")
+
+    def test_first_response_wins_feishu_then_terminal(self):
+        """Feishu answers first, terminal submit is already_resolved."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        mgr.submit_answer("r1", "F", "feishu")
+        # Keyboard still has keys but DB already answered
+        kb = FakeKeyboard(["T", "\r"])
+
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "F")
+        self.assertEqual(result["source"], "feishu")
+
+    def test_feishu_answer_in_thread(self):
+        """_wait_for_user_request in a thread wakes when Feishu writes to SQLite."""
+        from agent.user_requests import UserRequestManager
+        from agent.event_runtime import _wait_for_user_request
+
+        mgr = UserRequestManager(path=self.db_path)
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+
+        # Keyboard with no keys (simulates user not typing)
+        kb = FakeKeyboard([])
         result_box = []
 
         def wait_in_thread():
-            ans, src = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
-            result_box.append((ans, src))
+            r = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0.05)
+            result_box.append(r)
 
         t = threading.Thread(target=wait_in_thread, daemon=True)
         t.start()
 
-        # Wait a moment, then submit Feishu answer (no answer_event.set())
-        time.sleep(0.3)
-        mgr.submit_answer(req_id, "feishu thread answer", "feishu")
+        time.sleep(0.2)
+        mgr.submit_answer("r1", "feishu thread", "feishu")
 
         t.join(timeout=5)
-        self.assertFalse(t.is_alive(), "_wait_for_answer should have returned")
+        self.assertFalse(t.is_alive(), "_wait_for_user_request should have returned")
         self.assertEqual(len(result_box), 1)
-        self.assertEqual(result_box[0], ("feishu thread answer", "feishu"))
+        self.assertEqual(result_box[0]["answer"], "feishu thread")
+        self.assertEqual(result_box[0]["source"], "feishu")
 
-    def test_first_response_wins_feishu_then_terminal(self):
-        """If Feishu answers first, terminal answer is rejected."""
+    def test_empty_enter_redisplays_prompt(self):
+        """Empty Enter does not submit; re-prompts."""
         from agent.user_requests import UserRequestManager
-        from agent.event_runtime import _wait_for_answer
+        from agent.event_runtime import _wait_for_user_request
 
         mgr = UserRequestManager(path=self.db_path)
-        req_id = "req-frw"
-        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+        mgr.create_request("r1", "evt1", 1, "s1", "call_for_user", "Q?")
+        # Enter (empty), then "ok", Enter
+        kb = FakeKeyboard(["\r", "o", "k", "\r"])
 
-        answer_event = threading.Event()
-        answer_holder = {}
+        result = _wait_for_user_request(mgr, "r1", kb, lambda t: None, poll_interval=0)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["answer"], "ok")
 
-        # Feishu answers first
-        result = mgr.submit_answer(req_id, "F", "feishu")
-        self.assertEqual(result, "success")
 
-        # Terminal tries to answer second
-        result2 = mgr.submit_answer(req_id, "T", "terminal")
-        self.assertEqual(result2, "already_resolved")
+class TestGetLatestWaitingForChat(unittest.TestCase):
+    """Tests for UserRequestManager.get_latest_waiting_for_chat."""
 
-        # _wait_for_answer should get the Feishu answer
-        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
-        self.assertEqual(answer, "F")
-        self.assertEqual(source, "feishu")
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        self.mgr = UserRequestManager(path=self.db_path)
 
-    def test_first_response_wins_terminal_then_feishu(self):
-        """If terminal answers first, Feishu answer is rejected."""
-        from agent.user_requests import UserRequestManager
-        from agent.event_runtime import _wait_for_answer
+    def test_finds_correct_chat(self):
+        self.mgr.create_request("r1", "ev1", 1, "s1", "call_for_user", "Q1")
+        self.mgr.update_feishu_message("r1", "m1", "chat1")
+        self.mgr.create_request("r2", "ev1", 1, "s1", "call_for_user", "Q2")
+        self.mgr.update_feishu_message("r2", "m2", "chat2")
 
-        mgr = UserRequestManager(path=self.db_path)
-        req_id = "req-frw2"
-        mgr.create_request(req_id, "evt1", 1, "sess1", "call_for_user", "prompt?")
+        result = self.mgr.get_latest_waiting_for_chat("chat1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["request_id"], "r1")
 
-        answer_event = threading.Event()
-        answer_holder = {}
+    def test_ignores_other_chat(self):
+        self.mgr.create_request("r1", "ev1", 1, "s1", "call_for_user", "Q1")
+        self.mgr.update_feishu_message("r1", "m1", "chat1")
 
-        # Terminal answers first
-        result = mgr.submit_answer(req_id, "T", "terminal")
-        self.assertEqual(result, "success")
-        answer_holder["answer"] = "T"
-        answer_holder["source"] = "terminal"
-        answer_event.set()
+        result = self.mgr.get_latest_waiting_for_chat("chat2")
+        self.assertIsNone(result)
 
-        # Feishu tries to answer second
-        result2 = mgr.submit_answer(req_id, "F", "feishu")
-        self.assertEqual(result2, "already_resolved")
+    def test_ignores_answered(self):
+        self.mgr.create_request("r1", "ev1", 1, "s1", "call_for_user", "Q1")
+        self.mgr.update_feishu_message("r1", "m1", "chat1")
+        self.mgr.submit_answer("r1", "done", "feishu")
 
-        # _wait_for_answer should get the terminal answer
-        answer, source = _wait_for_answer(mgr, req_id, answer_event, answer_holder, lambda t: None)
-        self.assertEqual(answer, "T")
-        self.assertEqual(source, "terminal")
+        result = self.mgr.get_latest_waiting_for_chat("chat1")
+        self.assertIsNone(result)
+
+    def test_ignores_cancelled(self):
+        self.mgr.create_request("r1", "ev1", 1, "s1", "call_for_user", "Q1")
+        self.mgr.update_feishu_message("r1", "m1", "chat1")
+        self.mgr.mark_cancelled("r1")
+
+        result = self.mgr.get_latest_waiting_for_chat("chat1")
+        self.assertIsNone(result)
+
+    def test_returns_latest_when_multiple(self):
+        import time
+        self.mgr.create_request("r1", "ev1", 1, "s1", "call_for_user", "Q1")
+        self.mgr.update_feishu_message("r1", "m1", "chat1")
+        time.sleep(0.01)
+        self.mgr.create_request("r2", "ev1", 1, "s1", "call_for_user", "Q2")
+        self.mgr.update_feishu_message("r2", "m2", "chat1")
+
+        result = self.mgr.get_latest_waiting_for_chat("chat1")
+        self.assertEqual(result["request_id"], "r2")
+
+
 
 
 if __name__ == "__main__":

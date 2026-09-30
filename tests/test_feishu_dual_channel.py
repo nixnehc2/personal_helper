@@ -127,71 +127,9 @@ class TestFeishuClientInit(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class TestWaitForAnswer(unittest.TestCase):
-    """Test the _wait_for_answer helper."""
-
-    def test_immediate_answer(self):
-        from agent.event_runtime import _wait_for_answer
-        ev = threading.Event()
-        holder = {"answer": "test", "source": "terminal"}
-        ev.set()
-        answer, source = _wait_for_answer(None, None, ev, holder, lambda _: None)
-        self.assertEqual(answer, "test")
-        self.assertEqual(source, "terminal")
-
-    def test_answer_set_by_thread(self):
-        import time
-        from agent.event_runtime import _wait_for_answer
-        ev = threading.Event()
-        holder = {}
-        def set_answer():
-            time.sleep(0.1)
-            holder["answer"] = "delayed"
-            holder["source"] = "feishu"
-            ev.set()
-        t = threading.Thread(target=set_answer)
-        t.start()
-        answer, source = _wait_for_answer(None, None, ev, holder, lambda _: None)
-        self.assertEqual(answer, "delayed")
-        self.assertEqual(source, "feishu")
-        t.join()
-
-
-class TestTerminalInputThread(unittest.TestCase):
-    """Test the _start_terminal_input_thread helper."""
-
-    def test_terminal_thread_submits_answer(self):
-        from agent.event_runtime import _start_terminal_input_thread
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        mgr = UserRequestManager(Path(tmp.name) / "test.sqlite3")
-        mgr.create_request("r1", "e1", 1, "s1", "call_for_user", "Q?")
-        ev = threading.Event()
-        holder = {}
-        fake_input = Mock(return_value="my answer")
-        t = _start_terminal_input_thread(fake_input, mgr, "r1", ev, holder)
-        t.join(timeout=5)
-        self.assertTrue(ev.is_set())
-        self.assertEqual(holder.get("answer"), "my answer")
-        self.assertEqual(holder.get("source"), "terminal")
-
-    def test_feishu_answer_preempts_terminal(self):
-        import time
-        from agent.event_runtime import _start_terminal_input_thread
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        mgr = UserRequestManager(Path(tmp.name) / "test.sqlite3")
-        mgr.create_request("r1", "e1", 1, "s1", "call_for_user", "Q?")
-        ev = threading.Event()
-        holder = {}
-        mgr.submit_answer("r1", "feishu wins", "feishu")
-        ev.set()
-        slow_input = Mock(return_value="terminal answer")
-        t = _start_terminal_input_thread(slow_input, mgr, "r1", ev, holder)
-        t.join(timeout=5)
-        self.assertNotEqual(holder.get("source"), "terminal")
-        req = mgr.get_request("r1")
-        self.assertEqual(req["answer_source"], "feishu")
+# _wait_for_answer and _start_terminal_input_thread have been replaced by
+# _wait_for_user_request (tested in test_automation_protocol_violation.py).
+# The legacy _wait_for_answer is kept for backward compatibility only.
 
 
 if __name__ == "__main__":

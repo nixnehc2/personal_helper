@@ -15,6 +15,11 @@ from .automation_checker import connect, loop_lock
 from .automation_consumer import change_event
 from .scheduler import OSLock, RUNTIME, atomic_json, pending_users
 
+if os.name == "nt":
+    import msvcrt as _msvcrt
+else:
+    _msvcrt = None
+
 RESULTS = Path(__file__).resolve().parent.parent / "data/results"
 
 
@@ -229,46 +234,105 @@ def _create_feishu_client(request_manager):
         return None
 
 
-def _start_terminal_input_thread(read, request_manager, request_id,
-                                answer_event, answer_holder):
-    def _reader():
-        try:
-            while not answer_event.is_set():
-                try:
-                    user_input = read("回答> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    user_input = "/exit"
-                result = request_manager.submit_answer(
-                    request_id, user_input, "terminal",
-                )
-                if result == "success":
-                    answer_holder["answer"] = user_input
-                    answer_holder["source"] = "terminal"
-                    answer_event.set()
-                break
-        except Exception:
-            pass
-    t = threading.Thread(target=_reader, daemon=True)
-    t.start()
-    return t
+class WindowsKeyboard:
+    """Pollable keyboard input for Windows using msvcrt.
+
+    Avoids blocking input() so that Feishu or cancel signals can
+    terminate the wait immediately without leaving zombie threads.
+    """
+
+    def __init__(self):
+        if _msvcrt is None:
+            raise OSError("WindowsKeyboard requires Windows (msvcrt)")
+
+    def has_key(self):
+        return _msvcrt.kbhit()
+
+    def read_key(self):
+        return _msvcrt.getwch()
 
 
+def _wait_for_user_request(request_manager, request_id, keyboard, emit,
+                           poll_interval=0.1):
+    """Unified wait for call_for_user answer.
+
+    Polls both SQLite (for Feishu/remote answers and cancel/invalid status)
+    and keyboard (for terminal input) in a single loop.  No background
+    threads, no blocking input().
+
+    Returns a dict:
+      {"status": "answered", "answer": ..., "source": ...}
+      {"status": "cancelled"}
+      {"status": "invalid"}
+      {"status": "exit"}   # user pressed Ctrl+C
+    """
+    prompt = "回答> "
+    buffer = []
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    while True:
+        # 1. Check SQLite request status (authoritative state source)
+        req = request_manager.get_request(request_id)
+        if req:
+            status = req.get("status")
+            if status == "answered":
+                # Clear partial input line
+                if buffer:
+                    sys.stdout.write("\r" + " " * (len(prompt) + len(buffer)) + "\r")
+                    sys.stdout.flush()
+                return {"status": "answered", "answer": req["answer"],
+                        "source": req["answer_source"]}
+            if status in ("cancelled", "invalid"):
+                # Clear partial input line
+                if buffer:
+                    sys.stdout.write("\r" + " " * (len(prompt) + len(buffer)) + "\r")
+                    sys.stdout.flush()
+                return {"status": status}
+
+        # 2. Check keyboard input
+        if keyboard.has_key():
+            ch = keyboard.read_key()
+            if ch in ("\r", "\n"):
+                text = "".join(buffer).strip()
+                buffer.clear()
+                sys.stdout.write("\n")
+                if text:
+                    result = request_manager.submit_answer(
+                        request_id, text, "terminal",
+                    )
+                    if result == "success":
+                        return {"status": "answered", "answer": text,
+                                "source": "terminal"}
+                    # already_resolved: next loop picks up DB answer
+                # Empty input or already resolved: re-display prompt
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+            elif ch in ("\b", "\x7f"):
+                if buffer:
+                    buffer.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            elif ch == "\x03":  # Ctrl+C
+                sys.stdout.write("\n")
+                return {"status": "exit"}
+            elif ch.isprintable():
+                buffer.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+
+        time.sleep(poll_interval)
+
+
+# Deprecated: kept for backward compatibility with existing tests.
+# New code should use _wait_for_user_request instead.
 def _wait_for_answer(request_manager, request_id, answer_event, answer_holder,
                      emit, timeout=0.5):
-    """Wait for an answer from any channel.
-
-    Uses answer_event as a fast wake-up signal (set by terminal input thread),
-    but also polls the SQLite database each timeout cycle so that answers
-    submitted via Feishu (which only writes to SQLite) are also discovered.
-    The database is the authoritative state source; answer_event merely
-    reduces wait latency.
-    """
+    """Legacy wait using answer_event + SQLite polling."""
     while not answer_event.is_set():
         answer_event.wait(timeout=timeout)
         if answer_event.is_set():
             break
-        # Poll SQLite: Feishu (or other remote) answers arrive via submit_answer
-        # which only writes to the DB without setting answer_event.
         req = request_manager.get_request(request_id)
         if req and req.get("status") == "answered":
             answer_holder["answer"] = req["answer"]
@@ -277,7 +341,7 @@ def _wait_for_answer(request_manager, request_id, answer_event, answer_holder,
             break
     return answer_holder.get("answer"), answer_holder.get("source")
 
-def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None, feishu_client=None, request_manager=None):
+def run_event(client, files, store, rule_id, event_id, token, emit=print, read=input, automatic=True, email_index_path=None, lock=None, feishu_client=None, request_manager=None, keyboard=None):
     from .main import run_turn, safe_display, resolve_email_feedback
     output = emit
     emit = lambda text: output(safe_display(text))
@@ -373,17 +437,20 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                             emit(f"[event] feishu error: {exc}; terminal-only")
                     else:
                         emit("[event] feishu not available; terminal-only")
-                    answer_event = threading.Event()
-                    answer_holder = {}
-                    stdin_thread = _start_terminal_input_thread(read, request_manager, user_call_id, answer_event, answer_holder)
-                    user_answer, answer_source = _wait_for_answer(request_manager, user_call_id, answer_event, answer_holder, emit)
-                    if user_answer in (None, "/exit", "/event end"):
-                        request_manager.mark_invalid(user_call_id)
+                    kb = keyboard or (WindowsKeyboard() if _msvcrt is not None else None)
+                    if kb is None:
+                        raise OSError("call_for_user requires keyboard input; no keyboard adapter available")
+                    result = _wait_for_user_request(request_manager, user_call_id, kb, emit)
+                    if result["status"] in ("exit", "cancelled", "invalid"):
+                        if result["status"] == "exit":
+                            request_manager.mark_invalid(user_call_id)
                         if feishu_client is not None:
                             feishu_client.send_invalidated(user_call_id)
                         files.policy.close()
                         change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
                         return
+                    user_answer = result["answer"]
+                    answer_source = result["source"]
                     if answer_source == "feishu":
                         emit(f"[event] 通过飞书收到回答: {safe_display(user_answer)}")
                     else:

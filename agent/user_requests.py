@@ -135,6 +135,16 @@ class UserRequestManager:
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
 
+    def get_latest_waiting_for_chat(self, chat_id):
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT * FROM user_requests "
+                "WHERE status='waiting' AND feishu_chat_id=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (chat_id,),
+            ).fetchone()
+            return self._row_to_dict(row)
+
     def invalidate_waiting_for_event(self, event_id):
         stamp = datetime.now(timezone.utc).isoformat()
         with closing(self._connect()) as db, db:
