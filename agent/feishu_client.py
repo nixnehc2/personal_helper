@@ -72,11 +72,11 @@ class FeishuClient:
             .build()
         )
 
-        self._ws_client = (
-            lark.ws.Client.builder(app_id, app_secret)
-            .event_handler(handler)
-            .log_level(lark.LogLevel.WARNING)
-            .build()
+        self._ws_client = lark.ws.Client(
+            app_id=app_id,
+            app_secret=app_secret,
+            log_level=lark.LogLevel.WARNING,
+            event_handler=handler,
         )
 
         self._running = True
