@@ -466,12 +466,32 @@ class FileTools:
     def _execute(self, name, arguments):
         try:
             if name == "complete_event" and getattr(self, "event_session", False) and not self.processing_message and not self.read_only:
-                if not isinstance(arguments, dict) or set(arguments) != {"reply"} or not isinstance(arguments["reply"], str) or not arguments["reply"].strip() or self.policy._active() or self.pending_email_send is not None:
-                    raise ValueError("先完成或取消 Memory 事务并处理待发送邮件，再结束事件")
+                if not isinstance(arguments, dict):
+                    raise ValueError("complete_event 参数必须是对象")
+                # 兼容 message -> reply 别名（仅限 {"message": 非空字符串}）
+                if set(arguments) == {"message"} and isinstance(arguments["message"], str) and arguments["message"].strip():
+                    arguments = {"reply": arguments["message"]}
+                if set(arguments) != {"reply"}:
+                    raise ValueError(
+                        "complete_event 只接受 reply 参数；正确格式：complete_event(reply=完整最终回复)"
+                    )
+                reply = arguments["reply"]
+                if not isinstance(reply, str):
+                    raise ValueError("complete_event.reply 必须是字符串")
+                if not reply.strip():
+                    raise ValueError("complete_event.reply 不能为空")
+                if self.policy._active():
+                    raise ValueError(
+                        "当前仍有未结束的 Memory 事务，请先提交或取消 Memory 事务"
+                    )
+                if self.pending_email_send is not None:
+                    raise ValueError(
+                        "当前仍有待用户确认的邮件发送请求，请先处理该请求"
+                    )
                 if getattr(self, "call_for_user_active", False):
                     raise ValueError("call_for_user 和 complete_event 不能在同一轮调用")
                 self.event_complete = True
-                self.event_reply = arguments["reply"]
+                self.event_reply = reply
                 return dict(status="event_complete")
             if name == "call_for_user" and getattr(self, "event_session", False) and not self.processing_message and not self.read_only:
                 if not isinstance(arguments, dict) or set(arguments) != {"prompt"} or not isinstance(arguments["prompt"], str) or not arguments["prompt"].strip():

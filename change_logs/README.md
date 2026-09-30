@@ -27,6 +27,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-10-01 | [01：complete_event 参数校验拆分与 message 别名兼容](2026-10-01-01-complete-event-parameter-validation.md) |
 | 2026-09-30 | [07：call_for_user 飞书双通道接入](2026-09-30-07-call-for-user-feishu-dual-channel.md) |
 | 2026-09-30 | [06：飞书接入第一阶段 — 双向文本通信验证](2026-09-30-06-feishu-phase1-bidirectional.md) |
 | 2026-09-30 | [05：waiting_for_user 不阻塞新 Automation 启动](2026-09-30-05-waiting-for-user-scheduling.md) |
