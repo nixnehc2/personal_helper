@@ -299,140 +299,103 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
         while True:
             change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
             _auto_meta = {"rule_id": rule_id, "event_id": event_id, "event_content": event.get("content", "")}
-            run_turn(client, files, messages, user, emit=emit, extra_system=extra, emit_final=False,
-                     trigger_type="automation", session_id=files.policy.session, automation_meta=_auto_meta)
-            change_event(store, rule_id, event_id, lambda r, e: e.update(messages=messages, draft_id=files.active_email_draft_id), allow_paused=True)
-            if files.event_complete and not files.policy._active() and files.pending_email_send is None:
-                reply = "\n".join(b["text"] for b in messages[-1]["content"] if b.get("type") == "text")
-                if not reply.strip():
-                    raise ValueError("事件完成但没有最终回复")
-                event = change_event(store, rule_id, event_id, lambda r, e: e.update(
-                    reply=reply, completed_at=time.time(), messages=[], last_error=None, phase="delivery"), allow_paused=True)
-                if event is None:
-                    return
-                # A rule paused during execution keeps the final reply for resume.
-                current = store.manage("get", rule_id)["rule"]
-                if current["status"] == "active":
-                    deliver(store, current, event, None if automatic else emit)
-                return
-            # Handle call_for_user: dual-channel (terminal + feishu)
-            if getattr(files, "call_for_user_active", False):
-                import uuid as _uuid
-                user_call_id = _uuid.uuid4().hex
-                files.call_for_user_active = False
-                prompt = files.call_for_user_prompt
-                files.call_for_user_prompt = None
-                change_event(store, rule_id, event_id, lambda r,e:e.update(phase="waiting_for_user"), allow_paused=True)
-                # Create UserRequest
-                if request_manager is None:
-                    from .user_requests import UserRequestManager
-                    request_manager = UserRequestManager()
-                req = request_manager.create_request(
-                    user_call_id, event_id, rule_id,
-                    files.policy.session, "call_for_user", prompt,
-                )
-                # Create Feishu client if not already available
-                if feishu_client is None:
-                    feishu_client = _create_feishu_client(request_manager)
-                # Display on terminal
-                emit(f"[event] call_for_user requested (user_call_id={user_call_id})")
-                if not files.policy._active():
-                    emit("[event] waiting for user; execution slot released")
-                else:
-                    emit("[event] waiting for user while holding memory lock")
-                emit(safe_display(prompt))
-                emit("可在当前终端回答，也可在手机飞书回答。回答问题后可继续，/exit 结束事件")
-                # Send to Feishu
-                if feishu_client is not None:
-                    try:
-                        chat_id = feishu_client._user_open_id
-                        msg_id, cid = feishu_client.send_question(
-                            chat_id, prompt, user_call_id,
-                        )
-                        if msg_id:
-                            request_manager.update_feishu_message(user_call_id, msg_id, cid)
-                            emit("[event] feishu notification sent")
-                        else:
-                            emit("[event] feishu send failed; terminal-only")
-                    except Exception as exc:
-                        emit(f"[event] feishu error: {exc}; terminal-only")
-                else:
-                    emit("[event] feishu not available; terminal-only")
-                # Dual-channel answer tracking
-                answer_event = threading.Event()
-                answer_holder = {}
-                # Start terminal input thread
-                stdin_thread = _start_terminal_input_thread(
-                    read, request_manager, user_call_id, answer_event, answer_holder,
-                )
-                # Wait for answer from either channel
-                user_answer, answer_source = _wait_for_answer(
-                    request_manager, user_call_id, answer_event, answer_holder, emit,
-                )
-                if user_answer in (None, "/exit", "/event end"):
-                    request_manager.mark_invalid(user_call_id)
-                    if feishu_client is not None:
-                        feishu_client.send_invalidated(user_call_id)
-                    files.policy.close()
-                    change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
-                    return
-                if answer_source == "feishu":
-                    emit(f"[event] 已通过飞书收到回答: {safe_display(user_answer)}")
-                else:
-                    emit(f"[event] user input received (user_call_id={user_call_id})")
-                change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
-                active_user_call_id = user_call_id
-                active_feishu_client = feishu_client
-                user = user_answer
-                continue
-            # -- Protocol violation detection and recovery --
-            outcome = classify_automation_turn(event, files)
-            if outcome == "protocol_violation":
-                emit("[automation] protocol_violation event_id=%s" % event_id)
-                recovery_turn = 0
-                recovery_succeeded = False
-                while recovery_turn < MAX_PROTOCOL_RECOVERY_ATTEMPTS:
-                    recovery_turn += 1
-                    emit("[automation] recovery_attempt=%d event_id=%s" % (recovery_turn, event_id))
-                    recovery_instruction = "Runtime 检测到你在上一轮没有调用 complete_event 也没有调用 call_for_user。这是一个 Automation protocol violation。请根据任务实际完成情况，立即做出明确选择：任务已完成则调用 complete_event(reply=...)；需要用户输入则调用 call_for_user(prompt=...)。不要输出普通文本。"
-                    messages.append({"role": "user", "content": recovery_instruction})
-                    try:
-                        with scheduler.turn(emit):
-                            run_turn(client, files, messages, recovery_instruction,
-                                     emit=emit, extra_system=extra, emit_final=False,
-                                     trigger_type="automation", session_id=files.policy.session)
-                    finally:
-                        if messages and messages[-1].get("content") == recovery_instruction:
-                            messages.pop()
-                    if files.event_complete and not files.policy._active() and files.pending_email_send is None:
-                        reply = ""
-                        if messages and isinstance(messages[-1].get("content"), list):
-                            reply = "\n".join(b["text"] for b in messages[-1]["content"] if b.get("type") == "text")
-                        if not reply.strip():
-                            reply = recovery_instruction
-                        event = change_event(store, rule_id, event_id, lambda r, e: e.update(
-                            reply=reply, completed_at=time.time(), messages=[], last_error=None, phase="delivery"), allow_paused=True)
-                        if event is not None:
-                            current = store.manage("get", rule_id)["rule"]
-                            if current["status"] == "active":
-                                deliver(store, current, event, None if automatic else emit)
-                        emit("[automation] protocol_recovered event_id=%s outcome=completed" % event_id)
-                        recovery_succeeded = True
+            recovery_turn = 0
+            while True:
+                run_turn(client, files, messages, user, emit=emit, extra_system=extra, emit_final=False,
+                         trigger_type="automation", session_id=files.policy.session, automation_meta=_auto_meta)
+                change_event(store, rule_id, event_id, lambda r, e: e.update(messages=messages, draft_id=files.active_email_draft_id), allow_paused=True)
+
+                if files.event_complete and not files.policy._active() and files.pending_email_send is None:
+                    if not files.event_reply:
+                        raise ValueError("complete_event 未提供最终回复")
+                    reply = files.event_reply
+                    event = change_event(store, rule_id, event_id, lambda r, e: e.update(
+                        reply=reply, completed_at=time.time(), messages=[], last_error=None, phase="delivery"), allow_paused=True)
+                    if event is None:
                         return
-                    new_outcome = classify_automation_turn(event, files)
-                    if new_outcome != "protocol_violation":
-                        emit("[automation] protocol_recovered event_id=%s outcome=%s" % (event_id, new_outcome))
-                        recovery_succeeded = True
-                        break
-                if not recovery_succeeded:
+                    current = store.manage("get", rule_id)["rule"]
+                    if current["status"] == "active":
+                        deliver(store, current, event, None if automatic else emit)
+                    return
+
+                if getattr(files, "call_for_user_active", False):
+                    import uuid as _uuid
+                    user_call_id = _uuid.uuid4().hex
+                    files.call_for_user_active = False
+                    prompt = files.call_for_user_prompt
+                    files.call_for_user_prompt = None
+                    change_event(store, rule_id, event_id, lambda r,e:e.update(phase="waiting_for_user"), allow_paused=True)
+                    if request_manager is None:
+                        from .user_requests import UserRequestManager
+                        request_manager = UserRequestManager()
+                    request_manager.create_request(
+                        user_call_id, event_id, rule_id,
+                        files.policy.session, "call_for_user", prompt,
+                    )
+                    if feishu_client is None:
+                        feishu_client = _create_feishu_client(request_manager)
+                    emit(f"[event] call_for_user requested (user_call_id={user_call_id})")
+                    if not files.policy._active():
+                        emit("[event] waiting for user; execution slot released")
+                    else:
+                        emit("[event] waiting for user while holding memory lock")
+                    emit(safe_display(prompt))
+                    emit("请在当前终端回答，也可以手机回答。回答完成可继续，/exit 暂停事件。")
+                    if feishu_client is not None:
+                        try:
+                            chat_id = feishu_client._user_open_id
+                            msg_id, cid = feishu_client.send_question(chat_id, prompt, user_call_id)
+                            if msg_id:
+                                request_manager.update_feishu_message(user_call_id, msg_id, cid)
+                                emit("[event] feishu notification sent")
+                            else:
+                                emit("[event] feishu send failed; terminal-only")
+                        except Exception as exc:
+                            emit(f"[event] feishu error: {exc}; terminal-only")
+                    else:
+                        emit("[event] feishu not available; terminal-only")
+                    answer_event = threading.Event()
+                    answer_holder = {}
+                    stdin_thread = _start_terminal_input_thread(read, request_manager, user_call_id, answer_event, answer_holder)
+                    user_answer, answer_source = _wait_for_answer(request_manager, user_call_id, answer_event, answer_holder, emit)
+                    if user_answer in (None, "/exit", "/event end"):
+                        request_manager.mark_invalid(user_call_id)
+                        if feishu_client is not None:
+                            feishu_client.send_invalidated(user_call_id)
+                        files.policy.close()
+                        change_event(store, rule_id, event_id, lambda r, e: e.update(suspended=True), allow_paused=True)
+                        return
+                    if answer_source == "feishu":
+                        emit(f"[event] 通过飞书收到回答: {safe_display(user_answer)}")
+                    else:
+                        emit(f"[event] user input received (user_call_id={user_call_id})")
+                    change_event(store, rule_id, event_id, lambda r,e:e.update(phase="running"), allow_paused=True)
+                    active_user_call_id = user_call_id
+                    active_feishu_client = feishu_client
+                    user = user_answer
+                    break
+
+                if getattr(files, "pending_email_send", None) is not None or getattr(files, "pending_approval", None) is not None:
+                    break
+
+                recovery_turn += 1
+                if recovery_turn > MAX_PROTOCOL_RECOVERY_ATTEMPTS:
                     emit("[automation] protocol_recovery_failed event_id=%s" % event_id)
-            # -- Fall through to manual wait-for-user (recovery failed or not triggered) --
+                    break
+                emit("[automation] protocol_violation event_id=%s" % event_id)
+                emit("[automation] recovery_attempt=%d event_id=%s" % (recovery_turn, event_id))
+                user = "Runtime 检测到你在上一轮没有调用 complete_event 也没有调用 call_for_user。这是一个 Automation protocol violation。请根据任务实际完成情况，立即做出明确选择：任务已完成则调用 complete_event(reply=...)；需要用户输入则调用 call_for_user(prompt=...)。不要输出普通文本。"
+                continue
+            if getattr(files, "call_for_user_active", False):
+                continue
+            if files.event_complete and not files.policy._active() and files.pending_email_send is None:
+                continue
+            # -- Fall through to manual wait-for-user (recovery failed or approval blocked completion) --
             files.event_complete = False
             change_event(store, rule_id, event_id, lambda r,e:e.update(phase="waiting_feedback"), allow_paused=True)
             if messages and isinstance(messages[-1].get("content"), list):
                 emit("\n".join(b["text"] for b in messages[-1]["content"] if b.get("type") == "text"))
             attention(event_id)
-            emit("等待反馈；/commit 审阅提交，/cancel 取消事务，/exit 结束并暂停此事件")
             scheduler.automatic = False
             while True:
                 try:

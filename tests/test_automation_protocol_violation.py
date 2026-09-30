@@ -158,8 +158,9 @@ class TestProtocolViolationRecovery(unittest.TestCase):
 
         self.assertTrue(files.event_complete)
         self.assertEqual(call_count[0], 2)
-        recovered = [m for m in self.emitted if "protocol_recovered" in m]
-        self.assertTrue(len(recovered) > 0, "Expected protocol_recovered message: " + str(self.emitted))
+        self.assertEqual(event.get("reply"), "Task completed.")
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
 
     @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
     @patch("agent.main.run_turn")
@@ -186,13 +187,155 @@ class TestProtocolViolationRecovery(unittest.TestCase):
                       emit=self._emit, read=lambda p: "", automatic=True)
 
         self.assertTrue(files.event_complete)
+        self.assertEqual(event.get("reply"), "Done.")
         violations = [m for m in self.emitted if "protocol_violation" in m]
         self.assertEqual(len(violations), 0, "Should not trigger protocol violation")
 
     @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
     @patch("agent.main.run_turn")
-    def test_recovery_fails_after_max_attempts(self, mock_run_turn, mock_qq):
-        """Recovery attempt fails -> falls through to wait-for-user."""
+    def test_recovery_completes_via_call_for_user_then_complete_event(self, mock_run_turn, mock_qq):
+        """Protocol violation -> recovery -> call_for_user -> user answer -> complete_event."""
+        files = self._create_files()
+        event = self._mock_event()
+        rule = self._mock_rule(event)
+        store = self._setup_store(rule)
+        mock_ce = self._make_change_event_mock(event, rule)
+
+        call_count = [0]
+        seen_user_call_ids = []
+
+        def fake_run_turn(client, f, messages, user, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                messages.append({"role": "assistant", "content": [
+                    {"type": "text", "text": "Need more details."}
+                ]})
+                f.event_complete = False
+            elif call_count[0] == 2:
+                messages.append({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu1", "name": "call_for_user",
+                     "input": {"prompt": "Should I finalize now?"}}
+                ]})
+                f.event_complete = False
+                f.call_for_user_active = True
+                f.call_for_user_prompt = "Should I finalize now?"
+            else:
+                messages.append({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu2", "name": "complete_event",
+                     "input": {"reply": "Final result"}}
+                ]})
+                f.event_complete = True
+                f.event_reply = "Final result"
+
+        mock_run_turn.side_effect = fake_run_turn
+
+        class FakeRequestManager:
+            def create_request(self, request_id, event_id, rule_id, session, kind, prompt):
+                seen_user_call_ids.append(request_id)
+                return {"id": request_id}
+            def submit_answer(self, request_id, answer, source):
+                return "success"
+            def mark_invalid(self, request_id):
+                return None
+
+        request_manager = FakeRequestManager()
+
+        with patch("agent.event_runtime.change_event", mock_ce), \
+             patch("agent.event_runtime._start_terminal_input_thread", lambda read, rm, request_id, answer_event, answer_holder: None), \
+             patch("agent.event_runtime._wait_for_answer", lambda rm, request_id, ae, ah, emit: ("yes", "terminal")):
+            from agent.event_runtime import run_event
+            run_event(
+                MagicMock(), files, store, 1, "test-evt-001", "tok123",
+                emit=self._emit, read=lambda p: "", automatic=True,
+                request_manager=request_manager,
+            )
+
+        self.assertEqual(call_count[0], 3)
+        self.assertEqual(len(seen_user_call_ids), 1)
+        self.assertTrue(files.event_complete)
+        self.assertEqual(event.get("reply"), "Final result")
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+
+    @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
+    @patch("agent.main.run_turn")
+    def test_recovery_instruction_only_once(self, mock_run_turn, mock_qq):
+        """Recovery turn must send the recovery instruction exactly once to the model."""
+        files = self._create_files()
+        event = self._mock_event()
+        rule = self._mock_rule(event)
+        store = self._setup_store(rule)
+        mock_ce = self._make_change_event_mock(event, rule)
+
+        instruction = "Runtime 检测到你在上一轮没有调用 complete_event 也没有调用 call_for_user。这是一个 Automation protocol violation。请根据任务实际完成情况，立即做出明确选择：任务已完成则调用 complete_event(reply=...)；需要用户输入则调用 call_for_user(prompt=...)。不要输出普通文本。"
+
+        call_count = [0]
+        captured_instructions = []
+
+        def fake_run_turn(client, f, messages, user, **kwargs):
+            call_count[0] += 1
+            captured_instructions.append(user)
+            if call_count[0] == 1:
+                messages.append({"role": "assistant", "content": [
+                    {"type": "text", "text": "Plain text only."}
+                ]})
+                f.event_complete = False
+            else:
+                messages.append({"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "tu1", "name": "complete_event",
+                     "input": {"reply": "Recovered"}}
+                ]})
+                f.event_complete = True
+                f.event_reply = "Recovered"
+
+        mock_run_turn.side_effect = fake_run_turn
+
+        with patch("agent.event_runtime.change_event", mock_ce):
+            from agent.event_runtime import run_event
+            run_event(MagicMock(), files, store, 1, "test-evt-001", "tok123",
+                      emit=self._emit, read=lambda p: "", automatic=True)
+
+        self.assertEqual(call_count[0], 2)
+        self.assertEqual(captured_instructions[-1], instruction)
+        self.assertTrue(files.event_complete)
+        self.assertEqual(event.get("reply"), "Recovered")
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertEqual(captured_instructions.count(instruction), 1, "Recovery instruction must appear exactly once in run_turn calls")
+
+    @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
+    @patch("agent.main.run_turn")
+    def test_old_waiting_feedback_phase_does_not_mask_violation(self, mock_run_turn, mock_qq):
+        """Existing waiting_feedback phase must not prevent detecting a new violation."""
+        files = self._create_files()
+        event = self._mock_event()
+        event["phase"] = "waiting_feedback"
+        rule = self._mock_rule(event)
+        store = self._setup_store(rule)
+        mock_ce = self._make_change_event_mock(event, rule)
+
+        def fake_run_turn(client, f, messages, user, **kwargs):
+            messages.append({"role": "assistant", "content": [
+                {"type": "text", "text": "Plain text only."}
+            ]})
+            f.event_complete = False
+
+        mock_run_turn.side_effect = fake_run_turn
+
+        with patch("agent.event_runtime.change_event", mock_ce):
+            from agent.event_runtime import run_event
+            responses = iter(["/exit"])
+            run_event(MagicMock(), files, store, 1, "test-evt-001", "tok123",
+                      emit=self._emit, read=lambda p: next(responses), automatic=True)
+
+        self.assertTrue(any("protocol_violation" in m for m in self.emitted))
+        self.assertTrue(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertEqual(event.get("phase"), "waiting_feedback")
+        self.assertFalse(files.event_complete)
+
+    @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
+    @patch("agent.main.run_turn")
+    def test_recovery_again_plain_text_leads_to_recovery_failed(self, mock_run_turn, mock_qq):
+        """First turn plain text -> recovery still plain text -> recovery failed."""
         files = self._create_files()
         event = self._mock_event()
         rule = self._mock_rule(event)
@@ -201,7 +344,7 @@ class TestProtocolViolationRecovery(unittest.TestCase):
 
         def fake_run_turn(client, f, messages, user, **kwargs):
             messages.append({"role": "assistant", "content": [
-                {"type": "text", "text": "All done."}
+                {"type": "text", "text": "Still thinking."}
             ]})
             f.event_complete = False
 
@@ -214,42 +357,26 @@ class TestProtocolViolationRecovery(unittest.TestCase):
                       emit=self._emit, read=lambda p: next(responses), automatic=True)
 
         self.assertTrue(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertEqual(event.get("phase"), "waiting_feedback")
         self.assertFalse(files.event_complete)
 
     @patch("agent.automation_qq.read_event_qq", return_value={"text": "hi", "sender": {}})
     @patch("agent.main.run_turn")
-    def test_recovery_preserves_existing_tool_results(self, mock_run_turn, mock_qq):
-        """Recovery should not duplicate side effects from the first turn."""
+    def test_complete_event_reply_used_from_files(self, mock_run_turn, mock_qq):
+        """Event reply must come from files.event_reply, not from parsing messages."""
         files = self._create_files()
         event = self._mock_event()
         rule = self._mock_rule(event)
         store = self._setup_store(rule)
         mock_ce = self._make_change_event_mock(event, rule)
 
-        side_effect_count = [0]
-        call_count = [0]
         def fake_run_turn(client, f, messages, user, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                side_effect_count[0] += 1
-                messages.append({"role": "assistant", "content": [
-                    {"type": "tool_use", "id": "tu1", "name": "import_message",
-                     "input": {"source": "qq", "message_id": "123"}},
-                ]})
-                messages.append({"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": "tu1", "content": "OK"}
-                ]})
-                messages.append({"role": "assistant", "content": [
-                    {"type": "text", "text": "Imported. Done."}
-                ]})
-                f.event_complete = False
-            else:
-                messages.append({"role": "assistant", "content": [
-                    {"type": "tool_use", "id": "tu2", "name": "complete_event",
-                     "input": {"reply": "Imported and done."}}
-                ]})
-                f.event_complete = True
-                f.event_reply = "Imported and done."
+            messages.append({"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu1", "name": "complete_event",
+                 "input": {"reply": "Explicit final answer"}}
+            ]})
+            f.event_complete = True
+            f.event_reply = "Explicit final answer"
 
         mock_run_turn.side_effect = fake_run_turn
 
@@ -258,9 +385,11 @@ class TestProtocolViolationRecovery(unittest.TestCase):
             run_event(MagicMock(), files, store, 1, "test-evt-001", "tok123",
                       emit=self._emit, read=lambda p: "", automatic=True)
 
-        self.assertEqual(side_effect_count[0], 1)
-        self.assertEqual(call_count[0], 2)
         self.assertTrue(files.event_complete)
+        self.assertEqual(event.get("reply"), "Explicit final answer")
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+        self.assertFalse(any("protocol_recovery_failed" in m for m in self.emitted))
+
 
 
 if __name__ == "__main__":
