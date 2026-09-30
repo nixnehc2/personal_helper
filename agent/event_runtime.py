@@ -20,6 +20,35 @@ RESULTS = Path(__file__).resolve().parent.parent / "data/results"
 
 USER_WAIT_PHASES = frozenset({"waiting_feedback", "waiting_for_user"})
 
+MAX_PROTOCOL_RECOVERY_ATTEMPTS = 1
+
+
+def classify_automation_turn(event, session):
+    """Classify the outcome of an Automation Agent turn.
+
+    Returns one of: completed, waiting_for_user, waiting_for_approval,
+    waiting_for_feedback, or protocol_violation.
+
+    The runtime only checks structural state, never natural language semantics.
+    """
+    if event.get("reply") is not None:
+        return "completed"
+
+    phase = event.get("phase")
+    if phase in USER_WAIT_PHASES:
+        return "waiting_for_user"
+
+    if getattr(session, "event_complete", False):
+        return "completed"
+
+    if getattr(session, "pending_email_send", None) is not None:
+        return "waiting_for_approval"
+
+    if getattr(session, "pending_approval", None) is not None:
+        return "waiting_for_approval"
+
+    return "protocol_violation"
+
 
 def blocks_new_event(event):
     """True when an event is actively running an Agent turn and must not be preempted."""
@@ -356,7 +385,48 @@ def run_event(client, files, store, rule_id, event_id, token, emit=print, read=i
                 active_feishu_client = feishu_client
                 user = user_answer
                 continue
-            emit("[event][warning] automation turn ended without call_for_user or complete_event")
+            # -- Protocol violation detection and recovery --
+            outcome = classify_automation_turn(event, files)
+            if outcome == "protocol_violation":
+                emit("[automation] protocol_violation event_id=%s" % event_id)
+                recovery_turn = 0
+                recovery_succeeded = False
+                while recovery_turn < MAX_PROTOCOL_RECOVERY_ATTEMPTS:
+                    recovery_turn += 1
+                    emit("[automation] recovery_attempt=%d event_id=%s" % (recovery_turn, event_id))
+                    recovery_instruction = "Runtime 检测到你在上一轮没有调用 complete_event 也没有调用 call_for_user。这是一个 Automation protocol violation。请根据任务实际完成情况，立即做出明确选择：任务已完成则调用 complete_event(reply=...)；需要用户输入则调用 call_for_user(prompt=...)。不要输出普通文本。"
+                    messages.append({"role": "user", "content": recovery_instruction})
+                    try:
+                        with scheduler.turn(emit):
+                            run_turn(client, files, messages, recovery_instruction,
+                                     emit=emit, extra_system=extra, emit_final=False,
+                                     trigger_type="automation", session_id=files.policy.session)
+                    finally:
+                        if messages and messages[-1].get("content") == recovery_instruction:
+                            messages.pop()
+                    if files.event_complete and not files.policy._active() and files.pending_email_send is None:
+                        reply = ""
+                        if messages and isinstance(messages[-1].get("content"), list):
+                            reply = "\n".join(b["text"] for b in messages[-1]["content"] if b.get("type") == "text")
+                        if not reply.strip():
+                            reply = recovery_instruction
+                        event = change_event(store, rule_id, event_id, lambda r, e: e.update(
+                            reply=reply, completed_at=time.time(), messages=[], last_error=None, phase="delivery"), allow_paused=True)
+                        if event is not None:
+                            current = store.manage("get", rule_id)["rule"]
+                            if current["status"] == "active":
+                                deliver(store, current, event, None if automatic else emit)
+                        emit("[automation] protocol_recovered event_id=%s outcome=completed" % event_id)
+                        recovery_succeeded = True
+                        return
+                    new_outcome = classify_automation_turn(event, files)
+                    if new_outcome != "protocol_violation":
+                        emit("[automation] protocol_recovered event_id=%s outcome=%s" % (event_id, new_outcome))
+                        recovery_succeeded = True
+                        break
+                if not recovery_succeeded:
+                    emit("[automation] protocol_recovery_failed event_id=%s" % event_id)
+            # -- Fall through to manual wait-for-user (recovery failed or not triggered) --
             files.event_complete = False
             change_event(store, rule_id, event_id, lambda r,e:e.update(phase="waiting_feedback"), allow_paused=True)
             if messages and isinstance(messages[-1].get("content"), list):
