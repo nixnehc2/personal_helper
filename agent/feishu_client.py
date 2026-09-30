@@ -163,8 +163,12 @@ class FeishuClient:
     # ------------------------------------------------------------------
 
     def send_question(self, chat_id, text, request_id):
-        """Send *text* to *chat_id* and return (message_id, chat_id)."""
-        msg_id, cid = self._send_text(chat_id, text)
+        """Send *text* to *chat_id* and return (message_id, chat_id).
+
+        If chat_id looks like an open_id (starts with ou_), uses open_id type.
+        """
+        id_type = "open_id" if chat_id.startswith("ou_") else "chat_id"
+        msg_id, cid = self._send_text(chat_id, text, id_type=id_type)
         if msg_id:
             self._request_manager.mark_feishu_info(request_id, msg_id, cid or chat_id)
         return msg_id, cid
@@ -198,7 +202,7 @@ class FeishuClient:
         except Exception:
             pass
 
-    def _send_text(self, receive_id, text):
+    def _send_text(self, receive_id, text, id_type="chat_id"):
         """Send a text message. Returns (message_id, chat_id) or (None, None)."""
         if not self._http_client:
             return None, None
@@ -211,14 +215,15 @@ class FeishuClient:
         )
         request = (
             CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
+            .receive_id_type(id_type)
             .request_body(body)
             .build()
         )
         try:
             resp = self._http_client.im.v1.message.create(request)
             if resp.success():
-                return resp.data.message_id, receive_id
+                chat_id = getattr(resp.data, "chat_id", None) or receive_id
+                return resp.data.message_id, chat_id
             print(f"[feishu] send failed: code={resp.code} msg={resp.msg}")
         except Exception as exc:
             print(f"[feishu] send error: {exc}")

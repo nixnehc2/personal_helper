@@ -24,7 +24,7 @@ def load_config(path=None):
                "EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_ACCOUNT", "EMAIL_AUTH_CODE", "EMAIL_FOLDER",
                "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "FILE_READER_ALLOWED_ROOTS", "AGENT_TIMEZONE",
                "QQ_API_URL", "QQ_ACCESS_TOKEN", "QQ_SYNC_INTERVAL_SECONDS", "QQ_SYNC_RETRY_SECONDS",
-               "FEISHU_APP_ID", "FEISHU_APP_SECRET"}
+               "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_USER_OPEN_ID"}
     if not isinstance(config, dict) or set(config) - allowed:
         raise ValueError("config.local.json contains unsupported configuration fields")
     if any(not isinstance(value, str) or not value.strip() for value in config.values()):
