@@ -8,6 +8,7 @@
 | --- | --- |
 | [QQ 可读消息](docs/QQ-READABLE-MESSAGES.md) | text/@/reply、混合消息、CQ 与原始 segments |
 | [QQ 周期同步与白名单](docs/QQ-STARTUP-SYNC.md) | 稳定会话身份、持久化周期、重试与手动同步 |
+| [飞书 Phase 1 测试](../docs/feishu_phase1_test.md) | 第一阶段双向文本通信验证 |
 | [General Import Agent](docs/GENERAL-IMPORT.md) | 单条外部消息进入正常 Agent、共享工具与处理状态 |
 | [完整使用说明](docs/README.md) | 启动、配置、Memory、文件读写、Email、Automation、QQ |
 | [统一 Message 第三阶段](docs/MESSAGE-V3.md) | 查询、查看、选择导入与 imported/Memory 完成边界 |
@@ -25,6 +26,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-09-30 | [06：飞书接入第一阶段 — 双向文本通信验证](2026-09-30-06-feishu-phase1-bidirectional.md) |
 | 2026-09-30 | [05：waiting_for_user 不阻塞新 Automation 启动](2026-09-30-05-waiting-for-user-scheduling.md) |
 | 2026-09-30 | [04：call_for_user Automation 工具](2026-09-30-04-call-for-user-automation.md) |
 | 2026-09-30 | [03：架构简化与权限模型统一](2026-09-30-03-architecture-simplification-unified-permissions.md) |
