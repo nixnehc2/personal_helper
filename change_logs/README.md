@@ -27,6 +27,7 @@
 
 | 日期 | 记录 |
 | --- | --- |
+| 2026-10-03 | [01：移除邮件下载的 RFC822.SIZE 硬校验](2026-10-03-01-email-size-mismatch.md) |
 | 2026-10-01 | [01：complete_event 参数校验拆分与 message 别名兼容](2026-10-01-01-complete-event-parameter-validation.md) |
 
 | 2026-10-01 | [02：Automation Turn Protocol Violation Detection and Recovery](2026-10-01-02-automation-protocol-violation-recovery.md) |

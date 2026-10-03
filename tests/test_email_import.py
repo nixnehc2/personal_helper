@@ -205,8 +205,23 @@ class ImportTests(unittest.TestCase):
         self.assertFalse(self.index.get(1523)["imported"])
         self.assertIsNone(self.index.get(1523)["imported_at"])
 
-    def test_uidvalidity_uid_message_id_and_size_mismatch_rejected(self):
-        for field, value in (("validity", b"200"), ("return_uid", b"43"), ("size_offset", 1),
+    def test_size_mismatch_downloads_and_imports(self):
+        from agent.email_import import download_eml, identity
+        self.mailbox.size_offset = 100 - len(self.raw)
+        self.assertNotEqual(len(self.raw), 100)
+        self.assertEqual(download_eml(identity(self.index.get(1523)), CONFIG), self.raw)
+        result = self.execute()
+        self.assertEqual(result["status"], "processed")
+        self.assertTrue(result["imported"])
+        self.assertEqual((self.index.path.parent / "raw/1523.eml").read_bytes(), self.raw)
+
+    def test_matching_size_downloads_unchanged(self):
+        from agent.email_import import download_eml, identity
+        self.assertEqual(self.mailbox.size_offset, 0)
+        self.assertEqual(download_eml(identity(self.index.get(1523)), CONFIG), self.raw)
+
+    def test_uidvalidity_uid_and_message_id_mismatch_rejected(self):
+        for field, value in (("validity", b"200"), ("return_uid", b"43"),
                              ("raw", self.raw.replace(b"<one>", b"<wrong>"))):
             with self.subTest(field=field), patch.object(self.mailbox, field, value):
                 self.assertIn("error", self.execute())

@@ -82,7 +82,7 @@ def download_eml(locator, settings):
             uid = re.search(rb"\bUID\s+(\d+)\b", part[0])
             size = re.search(rb"\bRFC822.SIZE\s+(\d+)\b", part[0])
             if uid and uid[1].decode("ascii") == locator["imap_uid"] and b"BODY[]" in part[0].upper():
-                if not size or not isinstance(part[1], bytes) or len(part[1]) != int(size[1]):
+                if not isinstance(part[1], bytes):
                     raise ValueError("incomplete RFC822 body")
                 raw = part[1]
         if not raw:
