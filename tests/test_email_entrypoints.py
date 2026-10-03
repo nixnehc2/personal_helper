@@ -45,7 +45,7 @@ class EmailEntrypointTests(unittest.TestCase):
                 patch("builtins.input", side_effect=[command, "/exit"]), \
                 patch.object(self.files, "execute", wraps=self.files.execute) as execute, \
                 redirect_stdout(output):
-            self.assertEqual(chat_main(), 0)
+            self.assertEqual(chat_main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3"), 0)
             execute.assert_called_once_with("update_email", {})
         client.complete.assert_not_called()
         return output.getvalue()

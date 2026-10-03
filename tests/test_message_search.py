@@ -178,6 +178,6 @@ class SearchTests(unittest.TestCase):
              patch('builtins.input', side_effect=['/search_messages --source qq "MaxRL paper"', '/exit']), \
              patch('agent.main.run_turn', side_effect=AssertionError('Agent called')), \
              redirect_stdout(StringIO()) as output:
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.base / "automations.sqlite3"), 0)
         self.assertIn('找到 1 条 Message', output.getvalue())
         self.assertEqual(before, {p.name: p.read_bytes() for p in root.rglob('*.md')})

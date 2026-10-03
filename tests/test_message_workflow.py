@@ -236,7 +236,7 @@ class UnifiedMessageTests(unittest.TestCase):
             with self.assertRaises(ValueError): parse_tool_command(text)
         client=ScriptClient([]); client.model='test'
         with patch('sys.argv',['agent.main']),patch('agent.main.FileTools',return_value=self.files),patch('agent.main.Client',return_value=client),patch('agent.main.load_config',return_value={'ANTHROPIC_AUTH_TOKEN':'test'}),patch('builtins.input',side_effect=['/list_messages qq','/read_message qq 1','/import_message qq 1','/exit']),redirect_stdout(StringIO()) as output:
-            self.assertEqual(main(),0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.base / "automations.sqlite3"),0)
         self.assertIn('测试群',output.getvalue())
         self.assertIn('processed',output.getvalue())
         self.assertTrue(self.store.get(1).imported)

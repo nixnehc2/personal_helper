@@ -211,7 +211,7 @@ print(json.dumps(result))
              patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
              patch("agent.main.Client", return_value=self.client), \
              patch("builtins.input", side_effect=["hello", "/automation consume", "bye", "/exit"]), redirect_stdout(StringIO()):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.path), 0)
         self.assertEqual(len(inputs[1]), 1)
         self.assertNotIn("hello", str(inputs[1]))
         self.assertNotIn("schedule:1:", str(inputs[2]))

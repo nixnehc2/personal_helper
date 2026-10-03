@@ -1,9 +1,10 @@
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from email import policy
 from email.message import EmailMessage
 from io import StringIO
 import imaplib
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -109,7 +110,7 @@ class ImportTests(unittest.TestCase):
                 patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
                 patch("agent.main.Client", return_value=client), \
                 patch("builtins.input", side_effect=[text, "/exit"]), redirect_stdout(output):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.base / "automations.sqlite3"), 0)
         return output.getvalue()
 
     def test_direct_and_agent_import_share_loader_without_nested_turn(self):
@@ -126,6 +127,53 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(client.result['status'],'loaded')
         self.assertFalse(client.result['imported'])
         self.assertTrue(self.index.get(1523)['imported'])
+
+    def test_chat_isolates_store_and_never_creates_background_resources(self):
+        from agent.automations import AutomationStore
+        path = self.base / "automations.sqlite3"
+        with patch("agent.automations.AutomationStore", wraps=AutomationStore) as store, \
+                patch("agent.event_runtime.BackgroundConsumer") as consumer, \
+                patch("agent.event_runtime.launch") as launch, \
+                patch("agent.event_runtime.subprocess.Popen") as popen:
+            self.chat("/import_email 1523", ImportClient())
+        store.assert_called_once_with(path)
+        consumer.assert_not_called()
+        consumer.return_value.start.assert_not_called()
+        consumer.return_value.close.assert_not_called()
+        launch.assert_not_called()
+        popen.assert_not_called()
+        self.assertTrue(self.index.get(1523)["imported"])
+
+    def test_chat_preserves_pending_event_in_isolated_database(self):
+        from agent.automations import AutomationStore
+        from test_automations import NOW, timed
+        path = self.base / "automations.sqlite3"
+        store = AutomationStore(path, {}, lambda: NOW)
+        rule_id = store.manage("create", rule=timed())["rule"]["id"]
+        pending = json.dumps([dict(event_id="test:pending", attempts=3,
+                                   active_session=None, pid=None)])
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("UPDATE automations SET pending_events=? WHERE id=?", (pending, rule_id))
+        before = store.manage("get", rule_id)["rule"]
+        with patch("agent.event_runtime.launch") as launch:
+            self.chat("/import_email 1523", ImportClient())
+        launch.assert_not_called()
+        self.assertEqual(store.manage("get", rule_id)["rule"], before)
+
+    def test_main_defaults_start_and_close_consumer_with_default_store(self):
+        # Mock both runtime dependencies: verify production defaults without opening a real DB.
+        with patch("sys.argv", ["agent.main"]), \
+                patch("agent.main.FileTools", return_value=self.files), \
+                patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
+                patch("agent.main.Client", return_value=Mock(model="test")), \
+                patch("agent.automations.AutomationStore") as store, \
+                patch("agent.event_runtime.BackgroundConsumer") as consumer, \
+                patch("builtins.input", side_effect=["/exit"]), redirect_stdout(StringIO()):
+            self.assertEqual(main(), 0)
+        store.assert_called_once_with(None)
+        consumer.assert_called_once_with(self.files, store.return_value)
+        consumer.return_value.start.assert_called_once_with()
+        consumer.return_value.close.assert_called_once_with()
 
     def test_local_email_keeps_legacy_processor_only(self):
         path=self.base/'local.eml'; path.write_bytes(self.raw)

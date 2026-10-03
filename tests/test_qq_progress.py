@@ -264,7 +264,7 @@ class RuntimeProgressTests(unittest.TestCase):
         client=type('Client',(),{'model':'test'})()
         out=StringIO()
         with self.core() as core, patch('sys.argv',['agent.main']),patch('agent.main.FileTools',return_value=self.files),patch('agent.main.Client',return_value=client),patch('agent.main.load_config',return_value={'ANTHROPIC_AUTH_TOKEN':'test'}),patch('builtins.input',side_effect=['/update_qq','/exit']),redirect_stdout(out):
-            self.assertEqual(main(),0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.base / "automations.sqlite3"),0)
             core.assert_called_once()
             self.assertTrue(callable(core.call_args.kwargs['progress']))
         self.assertIn('1/1 100%',out.getvalue())

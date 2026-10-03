@@ -143,7 +143,7 @@ class AutomationsTests(unittest.TestCase):
                 patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
                 patch("agent.main.Client", return_value=SimpleNamespace(model="test")), \
                 patch("builtins.input", side_effect=commands), redirect_stdout(output):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.path), 0)
         self.assertIn("#1", output.getvalue())
         self.assertIn("Windows 通知", output.getvalue())
         self.assertNotIn("本轮中止", output.getvalue())

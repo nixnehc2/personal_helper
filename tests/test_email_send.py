@@ -198,7 +198,7 @@ class SendEmailTests(unittest.TestCase):
             FakeSMTP.messages.append(message)
         def worker():
             try:
-                main()
+                main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3")
             except BaseException as error:
                 errors.append(error)
         with patch("sys.argv", ["agent.main"]), patch("agent.main.FileTools", return_value=files), patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), patch("agent.main.Client", return_value=Mock(model="test")), patch("agent.event_runtime.BackgroundConsumer"), patch("builtins.input", side_effect=read), patch("agent.email_send.smtp_deliver", side_effect=smtp), redirect_stdout(StringIO()):
@@ -244,7 +244,7 @@ class SendEmailTests(unittest.TestCase):
             with self.subTest(ending=type(ending).__name__):
                 files = self.files(lambda _: True)
                 with patch("sys.argv", ["agent.main"]), patch("agent.main.FileTools", return_value=files), patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), patch("agent.main.Client", return_value=Mock(model="test")), patch("agent.event_runtime.BackgroundConsumer"), patch("builtins.input", side_effect=["/send_email 1", ending]), redirect_stdout(StringIO()):
-                    self.assertEqual(main(), 0)
+                    self.assertEqual(main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3"), 0)
                 self.assertIsNone(files.pending_email_send)
                 self.assertEqual(FakeSMTP.messages, [])
                 self.assertEqual(DraftStore().read(1)["status"], "draft")
@@ -285,7 +285,7 @@ class SendEmailTests(unittest.TestCase):
                 patch("builtins.input", side_effect=["/send_email 1", "yes", "/exit"]), \
                 patch.object(files, "execute", wraps=files.execute) as execute, \
                 redirect_stdout(StringIO()):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3"), 0)
         execute.assert_called_once_with("send_email", {"draft_id": 1})
         self.assertEqual(DraftStore().read(1)["status"], "sent")
 

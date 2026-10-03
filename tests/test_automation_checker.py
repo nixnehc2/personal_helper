@@ -234,6 +234,6 @@ class CheckerTests(unittest.TestCase):
              patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
              patch("agent.main.Client", return_value=SimpleNamespace(model="test")), \
              patch("builtins.input", side_effect=["/automation check", "/automation pending", "/automation pending 1", "/exit"]), redirect_stdout(output):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.path), 0)
         self.assertNotIn("本轮中止", output.getvalue())
         self.assertIn("入队 0", output.getvalue())

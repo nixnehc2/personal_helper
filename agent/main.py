@@ -516,7 +516,7 @@ def parse_tool_command(user):
     return None
 
 
-def main():
+def main(*, start_background_consumer=True, automation_db_path=None):
     parser = argparse.ArgumentParser(description="Personal Agent V1")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent / "memory")
     parser.add_argument("--event")
@@ -524,6 +524,8 @@ def main():
     parser.add_argument("--store", type=Path)
     parser.add_argument("--claim")
     args = parser.parse_args()
+    if automation_db_path is not None:
+        args.store = Path(automation_db_path)
     history = None
     event_lock = None
     exit_handler = None
@@ -583,8 +585,10 @@ def main():
         finally:
             exit_handler.__exit__(None, None, None)
         return 0
-    background = BackgroundConsumer(files, store)
-    background.start()
+    background = None
+    if start_background_consumer:
+        background = BackgroundConsumer(files, store)
+        background.start()
     messages = []
     try:
         while True:
@@ -672,7 +676,8 @@ def main():
                 print("未提交 Temporary 已保留；本会话可继续修改、/commit 或 /cancel。")
     finally:
         files.pending_email_send = None
-        background.close()
+        if background is not None:
+            background.close()
         files.policy.close()
     return 0
 

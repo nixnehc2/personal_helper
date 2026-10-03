@@ -141,7 +141,7 @@ class DraftTests(unittest.TestCase):
                 patch("agent.main.Client", return_value=client), \
                 patch("builtins.input", side_effect=["/edit_email 给张老师写邮件", "再简短一点", "/exit"]), \
                 patch.object(self.files, "execute", wraps=self.files.execute) as execute, redirect_stdout(StringIO()) as output:
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3"), 0)
         self.assertEqual(execute.call_count, 2)
         self.assertIn("active_email_draft_id=1", client.complete.call_args_list[1].args[0])
         self.assertIn("给张老师写邮件", json.dumps(client.complete.call_args_list[2].args[1], ensure_ascii=False))
@@ -162,7 +162,7 @@ class DraftTests(unittest.TestCase):
                 patch("agent.main.load_config", return_value={"ANTHROPIC_AUTH_TOKEN": "test"}), \
                 patch("agent.main.Client", return_value=Mock(model="test")), \
                 patch("builtins.input", side_effect=["/clear", "/exit"]), redirect_stdout(StringIO()):
-            self.assertEqual(main(), 0)
+            self.assertEqual(main(start_background_consumer=False, automation_db_path=self.root.parent / "automations.sqlite3"), 0)
         self.assertIsNone(self.files.active_email_draft_id)
         self.assertEqual(DraftStore().read(1)["status"], "draft")
 
